@@ -94,7 +94,10 @@ sync_once() {
     --exclude='*.local' \
     --exclude='/credentials/' \
     --exclude='/secrets/' \
-    --exclude='/config/local/' \
+    --include='/config/' \
+    --include='/config/local/' \
+    --include='/config/local/playback.example.json' \
+    --exclude='/config/local/***' \
     --exclude='/runtime/mpv/bin/' \
     --exclude='/runtime/mpv/downloads/' \
     --exclude='/runtime/mpv/**/*.7z' \

@@ -24,7 +24,8 @@ electron-debug.log*
 *.local
 credentials/
 secrets/
-config/local/
+config/local/*
+!config/local/playback.example.json
 
 # Downloaded runtime files (the manifest and schema remain tracked)
 runtime/mpv/bin/

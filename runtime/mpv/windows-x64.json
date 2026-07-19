@@ -1,21 +1,52 @@
 {
   "$schema": "./windows-manifest.schema.json",
   "schemaVersion": 1,
-  "status": "unselected",
+  "status": "pinned",
   "target": {
     "platform": "win32",
     "arch": "x64"
   },
   "artifact": {
-    "url": null,
-    "sha256": null
+    "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260610/mpv-x86_64-20260610-git-304426c.7z",
+    "fileName": "mpv-x86_64-20260610-git-304426c.7z",
+    "sha256": "facac536baa73c7b925771af5e39a3c9cb16b8d75b59a6e9800de89799dffca7",
+    "sizeBytes": 32691385,
+    "releaseUrl": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/tag/20260610"
   },
   "source": {
-    "buildProjectUrl": null,
-    "mpvCommit": null,
-    "ffmpegCommit": null,
-    "buildConfiguration": null
+    "upstreamInstallationUrl": "https://mpv.io/installation/",
+    "buildProjectUrl": "https://github.com/shinchiro/mpv-winbuild-cmake",
+    "buildProjectCommit": "5efd298cb51513c2410e4e9029b5e56b83c2aaac",
+    "buildProjectSourceUrl": "https://github.com/shinchiro/mpv-winbuild-cmake/tree/5efd298cb51513c2410e4e9029b5e56b83c2aaac",
+    "workflowUrl": "https://github.com/shinchiro/mpv-winbuild-cmake/actions/runs/27243718577",
+    "mpvRepositoryUrl": "https://github.com/mpv-player/mpv",
+    "mpvCommit": "304426c390901436fb1d4a63efbd582ae80c88f4",
+    "mpvSourceUrl": "https://github.com/mpv-player/mpv/commit/304426c390901436fb1d4a63efbd582ae80c88f4",
+    "ffmpegRepositoryUrl": "https://github.com/FFmpeg/FFmpeg",
+    "ffmpegCommit": "2576e09434d8026aab1769481b7b2fb43aa567c3",
+    "ffmpegSourceUrl": "https://github.com/FFmpeg/FFmpeg/commit/2576e09434d8026aab1769481b7b2fb43aa567c3",
+    "buildConfiguration": {
+      "workflow": ".github/workflows/mpv_clang.yml",
+      "compiler": "LLVM/Clang MinGW-w64 cross-toolchain",
+      "targetTriplet": "x86_64-w64-mingw32",
+      "cpuBaseline": "x86-64",
+      "cmakeOptions": [
+        "-DCOMPILER_TOOLCHAIN=clang",
+        "-DCLANG_PACKAGES_LTO=ON",
+        "-DENABLE_CCACHE=ON"
+      ],
+      "mpvOptions": [
+        "--default-library=shared",
+        "--prefer-static",
+        "-Doptimization=3",
+        "-Db_lto=true",
+        "-Dlibmpv=true",
+        "-Dvulkan=enabled"
+      ],
+      "ffmpegLicenseOptions": ["--enable-gpl", "--enable-version3"],
+      "artifactFlavor": "standalone player archive; baseline x86_64, not dev or x86-64-v3"
+    }
   },
-  "selectedAt": null,
-  "notes": "Placeholder only. Slice 2 selects and verifies an exact Windows runtime; do not resolve or download a latest artifact."
+  "selectedAt": "2026-07-19T05:40:57Z",
+  "notes": "Upstream-recognized but unofficial shinchiro Windows build. The GitHub release asset URL is immutable by version and filename; Coax also requires the exact SHA-256 before extraction. Redistribution and dependency-license review remains a pre-publication gate."
 }
