@@ -24,13 +24,17 @@
               cacert
               corepack
               ffmpeg
+              gh
               git
               gnumake
               mpv
               nodejs_24
               pkg-config
               python3
+              rsync
+              shellcheck
               stdenv.cc
+              watchexec
             ];
 
             shellHook = ''

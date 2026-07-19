@@ -60,6 +60,30 @@ corepack pnpm dev
 
 Native Windows launch is an explicit Slice 1 acceptance check. Linux/WSL success is not a substitute, and project documentation must not claim the Windows check passed until the script has completed on native Windows 11.
 
+### WSL-to-Windows development mirror
+
+Do not symlink Windows tools into the WSL repository. Keep Windows dependencies and generated output in a native NTFS mirror. From `nix develop`, create or refresh the default `C:\src\coax-win` mirror with:
+
+```bash
+./scripts/sync-windows.sh
+```
+
+For continuous source synchronization while native Windows electron-vite provides HMR:
+
+```bash
+./scripts/sync-windows.sh --watch
+```
+
+In a separate native Windows PowerShell window, run:
+
+```powershell
+Set-Location C:\src\coax-win
+corepack pnpm install --frozen-lockfile
+corepack pnpm dev
+```
+
+The mirror is one-way: edit the WSL source, not `C:\src\coax-win`. The sync deletes stale mirrored source files, but only after the destination has been marked as a Coax-managed mirror. Windows `node_modules`, build output, credentials, raw evidence, and runtime downloads are excluded and protected from synchronization.
+
 ## M0 evidence handling
 
 Raw native results, logs, and screenshots stay under the ignored path `artifacts/m0/<run-id>/`. When Windows uses a separate native clone, copy its result directory into the working repository without committing it:
