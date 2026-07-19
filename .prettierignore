@@ -1,0 +1,7 @@
+flake.lock
+.cache/
+node_modules/
+out/
+pnpm-lock.yaml
+PRD.md
+docs/M0_IMPLEMENTATION.md

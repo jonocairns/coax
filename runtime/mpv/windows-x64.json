@@ -1,0 +1,21 @@
+{
+  "$schema": "./windows-manifest.schema.json",
+  "schemaVersion": 1,
+  "status": "unselected",
+  "target": {
+    "platform": "win32",
+    "arch": "x64"
+  },
+  "artifact": {
+    "url": null,
+    "sha256": null
+  },
+  "source": {
+    "buildProjectUrl": null,
+    "mpvCommit": null,
+    "ffmpegCommit": null,
+    "buildConfiguration": null
+  },
+  "selectedAt": null,
+  "notes": "Placeholder only. Slice 2 selects and verifies an exact Windows runtime; do not resolve or download a latest artifact."
+}

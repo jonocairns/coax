@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coax.invalid/schemas/windows-mpv-runtime-v1.json",
+  "title": "Coax pinned Windows mpv runtime",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "target",
+    "artifact",
+    "source",
+    "notes"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["unselected", "pinned"] },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "arch"],
+      "properties": {
+        "platform": { "const": "win32" },
+        "arch": { "const": "x64" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "sha256"],
+      "properties": {
+        "url": { "type": ["string", "null"], "format": "uri" },
+        "sha256": {
+          "anyOf": [
+            { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "buildProjectUrl",
+        "mpvCommit",
+        "ffmpegCommit",
+        "buildConfiguration"
+      ],
+      "properties": {
+        "buildProjectUrl": { "type": ["string", "null"], "format": "uri" },
+        "mpvCommit": {
+          "anyOf": [
+            { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+            { "type": "null" }
+          ]
+        },
+        "ffmpegCommit": {
+          "anyOf": [
+            { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+            { "type": "null" }
+          ]
+        },
+        "buildConfiguration": { "type": ["string", "null"] }
+      }
+    },
+    "selectedAt": { "type": ["string", "null"], "format": "date-time" },
+    "notes": { "type": "string", "minLength": 1 }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "pinned" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "artifact": {
+            "properties": {
+              "url": { "type": "string", "format": "uri" },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
+          },
+          "source": {
+            "properties": {
+              "buildProjectUrl": { "type": "string", "format": "uri" },
+              "mpvCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+              "ffmpegCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+              "buildConfiguration": { "type": "string", "minLength": 1 }
+            }
+          },
+          "selectedAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["selectedAt"]
+      }
+    }
+  ]
+}

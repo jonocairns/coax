@@ -1,0 +1,45 @@
+# JavaScript dependencies and package-manager state
+node_modules/
+.pnpm-store/
+.cache/
+
+# Build and test output
+out/
+dist/
+release/
+coverage/
+*.tsbuildinfo
+
+# Logs and crash output
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+electron-debug.log*
+
+# Local credentials, stream inputs and environment overrides
+.env
+.env.*
+!.env.example
+*.local
+credentials/
+secrets/
+config/local/
+
+# Downloaded runtime files (the manifest and schema remain tracked)
+runtime/mpv/bin/
+runtime/mpv/downloads/
+runtime/mpv/**/*.7z
+runtime/mpv/**/*.dll
+runtime/mpv/**/*.exe
+runtime/mpv/**/*.zip
+
+# Unsanitized M0 evidence
+artifacts/m0/
+
+# Editor and operating-system noise
+.direnv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
