@@ -73,6 +73,18 @@ export interface WindowGeometrySample {
   y: number;
 }
 
+export interface MpvPlaybackStatusEvent {
+  generation: number;
+  kind: "playing" | "recovering";
+  reason:
+    | "cache-paused"
+    | "cache-resumed"
+    | "ipc-heartbeat-timeout"
+    | "mpv-exited"
+    | "playback-restart"
+    | "replacement-started";
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -202,6 +214,9 @@ export class MpvController {
     private readonly logger: StructuredPlaybackLogger,
     private readonly nativeWindowId: string,
     private readonly windowStackingHelperPath: string,
+    private readonly onPlaybackStatus: (
+      event: MpvPlaybackStatusEvent,
+    ) => void = () => undefined,
   ) {}
 
   async start(input: LocalPlaybackInput): Promise<void> {
@@ -305,6 +320,13 @@ export class MpvController {
       instanceId: instance.id,
       signal: normalizedCode(instance.child.signalCode),
     });
+    if (!instance.intentionalStop && !this.shuttingDown) {
+      this.onPlaybackStatus({
+        generation: this.generation,
+        kind: "recovering",
+        reason: "mpv-exited",
+      });
+    }
     instance.resolveExit();
 
     if (
@@ -368,6 +390,11 @@ export class MpvController {
           decideGeneration(this.generation, eventGeneration) === "current",
         pausedForCache: message.data,
       });
+      this.onPlaybackStatus({
+        generation: eventGeneration,
+        kind: message.data ? "recovering" : "playing",
+        reason: message.data ? "cache-paused" : "cache-resumed",
+      });
       return;
     }
     if (
@@ -386,6 +413,13 @@ export class MpvController {
         for (const resolve of instance.endFileWaiters.splice(0)) resolve();
       }
       this.logger.write("mpv-event", eventGeneration, details);
+      if (message.event === "playback-restart") {
+        this.onPlaybackStatus({
+          generation: eventGeneration,
+          kind: "playing",
+          reason: "playback-restart",
+        });
+      }
       if (
         message.event === "video-reconfig" ||
         message.event === "playback-restart"
@@ -629,6 +663,11 @@ export class MpvController {
             this.logger.write("mpv-hang-detected", this.generation, {
               reason: "ipc-heartbeat-timeout",
             });
+            this.onPlaybackStatus({
+              generation: this.generation,
+              kind: "recovering",
+              reason: "ipc-heartbeat-timeout",
+            });
             void this.replaceUnresponsiveInstance(
               instance,
               "ipc-heartbeat-timeout",
@@ -698,6 +737,11 @@ export class MpvController {
     this.logger.write("mpv-replacement-started", this.generation, {
       elapsedSinceFailureMs:
         Math.round((performance.now() - this.replacementStartedAt) * 10) / 10,
+    });
+    this.onPlaybackStatus({
+      generation: this.generation,
+      kind: "recovering",
+      reason: "replacement-started",
     });
     try {
       const instance = await this.spawnAndConnect("replacement");

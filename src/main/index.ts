@@ -6,6 +6,7 @@ import {
   globalShortcut,
   ipcMain,
   Menu,
+  powerMonitor,
   screen,
 } from "electron";
 import {
@@ -14,7 +15,14 @@ import {
   type RapidPlaylistTestResult,
   type RuntimeVersions,
 } from "../shared/api";
-import { MpvController } from "./mpv/controller";
+import {
+  INITIAL_OVERLAY_STATE,
+  reduceOverlayState,
+  type OverlayAction,
+  type OverlayState,
+  type OverlayStateEvent,
+} from "../shared/overlay";
+import { MpvController, type MpvPlaybackStatusEvent } from "./mpv/controller";
 import { readLocalPlaybackInput } from "./mpv/playback-input";
 import { loadVerifiedMpvRuntime } from "./mpv/runtime-manifest";
 import { StructuredPlaybackLogger } from "./mpv/structured-log";
@@ -24,10 +32,14 @@ import {
   presentationState,
   type GeometryReason,
 } from "./window-lifecycle";
-import { createMainWindowOptions } from "./window-options";
+import {
+  createMainWindowOptions,
+  createOverlayWindowOptions,
+} from "./window-options";
 
 let mainWindow: BrowserWindow | null = null;
 let videoWindow: BaseWindow | null = null;
+let overlayWindow: BrowserWindow | null = null;
 let videoPlaybackReady = false;
 let playbackLogger: StructuredPlaybackLogger | null = null;
 let mpvController: MpvController | null = null;
@@ -35,6 +47,8 @@ let playbackStartup: Promise<void> = Promise.resolve();
 let shutdownStarted = false;
 let shutdownComplete = false;
 const geometryTimers = new Map<GeometryReason, ReturnType<typeof setTimeout>>();
+let overlayState: OverlayState = { ...INITIAL_OVERLAY_STATE };
+let overlayAutoHideTimer: ReturnType<typeof setTimeout> | null = null;
 
 function runtimeVersions(): RuntimeVersions {
   return {
@@ -51,28 +65,187 @@ function currentWindow(): BrowserWindow {
   return mainWindow;
 }
 
+function isKnownRenderer(senderId: number): boolean {
+  return (
+    senderId === mainWindow?.webContents.id ||
+    senderId === overlayWindow?.webContents.id
+  );
+}
+
+function publishOverlayState(): void {
+  for (const window of [mainWindow, overlayWindow]) {
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+      continue;
+    }
+    window.webContents.send(IPC_CHANNELS.overlayStateChanged, overlayState);
+  }
+}
+
+function transitionOverlayState(event: OverlayStateEvent): void {
+  overlayState = reduceOverlayState(overlayState, event);
+  publishOverlayState();
+}
+
+function clearOverlayAutoHide(): void {
+  if (overlayAutoHideTimer) clearTimeout(overlayAutoHideTimer);
+  overlayAutoHideTimer = null;
+}
+
+function hideOverlay(reason: string, returnFocus: boolean): void {
+  clearOverlayAutoHide();
+  const wasFocused = overlayState.focused;
+  transitionOverlayState({ type: "hide" });
+  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
+  playbackLogger?.write("overlay-hidden", overlayState.generation, { reason });
+  if (returnFocus && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.focus();
+    playbackLogger?.write(
+      "overlay-focus-transferred",
+      overlayState.generation,
+      {
+        from: wasFocused ? "overlay" : "overlay-unfocused",
+        reason,
+        to: "shell",
+      },
+    );
+  }
+}
+
+function showOverlay(focus: boolean, reason: string): void {
+  const shell = mainWindow;
+  if (!shell || shell.isDestroyed()) return;
+  clearOverlayAutoHide();
+  const wasFocused = overlayState.visible && overlayState.focused;
+  const focusOverlay = focus || (overlayState.visible && overlayState.focused);
+  transitionOverlayState({ focus: focusOverlay, type: "show" });
+  alignNativeLayers(shell);
+  const overlay = overlayWindow;
+  if (!overlay || overlay.isDestroyed()) return;
+  overlay.setIgnoreMouseEvents(!focusOverlay, { forward: !focusOverlay });
+  if (focusOverlay) {
+    overlay.show();
+    overlay.focus();
+    if (focus && !wasFocused) {
+      playbackLogger?.write(
+        "overlay-focus-transferred",
+        overlayState.generation,
+        {
+          from: "shell",
+          reason,
+          to: "overlay",
+        },
+      );
+    }
+  } else {
+    overlay.showInactive();
+  }
+  overlay.moveTop();
+  playbackLogger?.write("overlay-shown", overlayState.generation, {
+    focusRequested: focus,
+    focused: focusOverlay,
+    reason,
+  });
+}
+
+function scheduleFeedbackAutoHide(): void {
+  clearOverlayAutoHide();
+  overlayAutoHideTimer = setTimeout(() => {
+    overlayAutoHideTimer = null;
+    if (overlayState.visible && !overlayState.focused) {
+      hideOverlay("feedback-timeout", false);
+    }
+  }, 3_500);
+}
+
+function applyOverlayAction(action: OverlayAction): OverlayState {
+  if (action === "hide") {
+    hideOverlay("renderer-back", true);
+  } else if (action === "show") {
+    showOverlay(true, "renderer-show");
+  } else if (overlayState.visible) {
+    hideOverlay("renderer-toggle", true);
+  } else {
+    showOverlay(true, "renderer-toggle");
+  }
+  return overlayState;
+}
+
+function setOverlayPointerCapture(capture: boolean): void {
+  const overlay = overlayWindow;
+  if (!overlay || overlay.isDestroyed() || !overlayState.visible) return;
+  overlay.setIgnoreMouseEvents(!capture, { forward: !capture });
+  playbackLogger?.write("overlay-pointer-mode", overlayState.generation, {
+    capture,
+  });
+}
+
+function requestPlaylistStep(
+  direction: "next" | "previous",
+): PlaylistIntentResult {
+  if (!mpvController) throw new Error("test-playback-not-ready");
+  const generation = mpvController.cyclePlaylist(direction);
+  transitionOverlayState({ direction, generation, type: "zap" });
+  showOverlay(false, "zap-feedback");
+  scheduleFeedbackAutoHide();
+  return { direction, generation };
+}
+
 function registerIpcHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.getRuntimeVersions, (): RuntimeVersions =>
-    runtimeVersions(),
+  ipcMain.handle(IPC_CHANNELS.getRuntimeVersions, (event): RuntimeVersions => {
+    if (!isKnownRenderer(event.sender.id))
+      throw new Error("untrusted-renderer");
+    return runtimeVersions();
+  });
+  ipcMain.handle(IPC_CHANNELS.getOverlayState, (event): OverlayState => {
+    if (!isKnownRenderer(event.sender.id))
+      throw new Error("untrusted-renderer");
+    return overlayState;
+  });
+  ipcMain.handle(
+    IPC_CHANNELS.requestOverlayAction,
+    (event, action: unknown): OverlayState => {
+      if (!isKnownRenderer(event.sender.id))
+        throw new Error("untrusted-renderer");
+      if (action !== "hide" && action !== "show" && action !== "toggle") {
+        throw new Error("invalid-overlay-action");
+      }
+      return applyOverlayAction(action);
+    },
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.setOverlayPointerCapture,
+    (event, capture: unknown): void => {
+      if (event.sender.id !== overlayWindow?.webContents.id) {
+        throw new Error("untrusted-overlay-renderer");
+      }
+      if (typeof capture !== "boolean") {
+        throw new Error("invalid-overlay-pointer-mode");
+      }
+      setOverlayPointerCapture(capture);
+    },
   );
   ipcMain.handle(
     IPC_CHANNELS.cycleTestChannel,
-    (_, direction: unknown): PlaylistIntentResult => {
+    (event, direction: unknown): PlaylistIntentResult => {
+      if (!isKnownRenderer(event.sender.id))
+        throw new Error("untrusted-renderer");
       if (direction !== "next" && direction !== "previous") {
         throw new Error("invalid-test-channel-direction");
       }
-      if (!mpvController) throw new Error("test-playback-not-ready");
-      return {
-        direction,
-        generation: mpvController.cyclePlaylist(direction),
-      };
+      return requestPlaylistStep(direction);
     },
   );
   ipcMain.handle(
     IPC_CHANNELS.runRapidPlaylistTest,
-    (): RapidPlaylistTestResult => runRapidPlaylistTest(),
+    (event): RapidPlaylistTestResult => {
+      if (!isKnownRenderer(event.sender.id))
+        throw new Error("untrusted-renderer");
+      return runRapidPlaylistTest();
+    },
   );
-  ipcMain.handle(IPC_CHANNELS.toggleFullscreen, (): boolean => {
+  ipcMain.handle(IPC_CHANNELS.toggleFullscreen, (event): boolean => {
+    if (!isKnownRenderer(event.sender.id))
+      throw new Error("untrusted-renderer");
     const window = currentWindow();
     toggleMainWindowFullscreen();
     return window.isFullScreen();
@@ -85,7 +258,7 @@ function runRapidPlaylistTest(): RapidPlaylistTestResult {
   let finalGeneration = 0;
   for (let index = 0; index < 30; index += 1) {
     finalDirection = index % 2 === 0 ? "next" : "previous";
-    finalGeneration = mpvController.cyclePlaylist(finalDirection);
+    finalGeneration = requestPlaylistStep(finalDirection).generation;
   }
   return { finalDirection, finalGeneration, requestCount: 30 };
 }
@@ -103,12 +276,24 @@ function configureDevelopmentMenu(): void {
         submenu: [
           {
             accelerator: "PageUp",
-            click: () => mpvController?.cyclePlaylist("previous"),
+            click: () => {
+              try {
+                requestPlaylistStep("previous");
+              } catch {
+                // The development action is inert before playback is ready.
+              }
+            },
             label: "Previous test channel",
           },
           {
             accelerator: "PageDown",
-            click: () => mpvController?.cyclePlaylist("next"),
+            click: () => {
+              try {
+                requestPlaylistStep("next");
+              } catch {
+                // The development action is inert before playback is ready.
+              }
+            },
             label: "Next test channel",
           },
           { type: "separator" },
@@ -122,6 +307,16 @@ function configureDevelopmentMenu(): void {
               }
             },
             label: "Run 30-change test",
+          },
+        ],
+      },
+      {
+        label: "Overlay",
+        submenu: [
+          {
+            accelerator: "F8",
+            click: () => applyOverlayAction("toggle"),
+            label: "Show or hide playback overlay",
           },
         ],
       },
@@ -140,12 +335,36 @@ function configureDevelopmentMenu(): void {
 }
 
 function registerAcceptanceShortcuts(): void {
-  if (process.env.COAX_SLICE3_ACCEPTANCE !== "1") return;
+  if (
+    process.env.COAX_SLICE3_ACCEPTANCE !== "1" &&
+    process.env.COAX_SLICE4_ACCEPTANCE !== "1"
+  ) {
+    return;
+  }
   const shortcuts: ReadonlyArray<readonly [string, () => void]> = [
-    ["PageUp", () => void mpvController?.cyclePlaylist("previous")],
-    ["PageDown", () => void mpvController?.cyclePlaylist("next")],
+    [
+      "PageUp",
+      () => {
+        try {
+          requestPlaylistStep("previous");
+        } catch {
+          // Playback is not ready yet.
+        }
+      },
+    ],
+    [
+      "PageDown",
+      () => {
+        try {
+          requestPlaylistStep("next");
+        } catch {
+          // Playback is not ready yet.
+        }
+      },
+    ],
     ["F9", () => void runRapidPlaylistTest()],
     ["F11", () => toggleMainWindowFullscreen()],
+    ["F8", () => void applyOverlayAction("toggle")],
   ];
   for (const [accelerator, action] of shortcuts) {
     if (!globalShortcut.register(accelerator, action)) {
@@ -172,7 +391,7 @@ function recordSettledGeometry(
   const flags = windowState(window);
   if (!decideGeometrySynchronization(reason, flags).record) return;
   const bounds = window.getContentBounds();
-  alignVideoWindow(window, bounds);
+  alignNativeLayers(window, bounds);
   const display = screen.getDisplayMatching(bounds);
   mpvController?.recordWindowGeometry({
     displayId: display.id,
@@ -184,24 +403,41 @@ function recordSettledGeometry(
     x: bounds.x,
     y: bounds.y,
   });
+  playbackLogger?.write(
+    "overlay-geometry-synchronized",
+    overlayState.generation,
+    {
+      displayId: display.id,
+      height: bounds.height,
+      reason,
+      scaleFactor: display.scaleFactor,
+      state: presentationState(flags),
+      width: bounds.width,
+      x: bounds.x,
+      y: bounds.y,
+    },
+  );
 }
 
-function alignVideoWindow(
+function alignNativeLayers(
   window: BrowserWindow,
   bounds = window.getContentBounds(),
 ): void {
   const host = videoWindow;
-  if (
-    !host ||
-    host.isDestroyed() ||
-    !videoPlaybackReady ||
-    !window.isVisible() ||
-    window.isMinimized()
-  ) {
-    return;
+  if (!window.isVisible() || window.isMinimized()) return;
+  if (host && !host.isDestroyed() && videoPlaybackReady) {
+    host.setBounds(bounds, false);
+    if (!host.isVisible()) host.showInactive();
   }
-  host.setBounds(bounds, false);
-  if (!host.isVisible()) host.showInactive();
+  const overlay = overlayWindow;
+  if (overlay && !overlay.isDestroyed()) {
+    overlay.setBounds(bounds, false);
+    if (overlayState.visible && !overlay.isVisible()) {
+      if (overlayState.focused) overlay.show();
+      else overlay.showInactive();
+    }
+    if (overlayState.visible) overlay.moveTop();
+  }
 }
 
 function scheduleGeometrySynchronization(
@@ -211,8 +447,9 @@ function scheduleGeometrySynchronization(
   if (window.isDestroyed()) return;
   if (window.isMinimized()) {
     videoWindow?.hide();
+    overlayWindow?.hide();
   } else {
-    alignVideoWindow(window);
+    alignNativeLayers(window);
   }
   const decision = decideGeometrySynchronization(reason, windowState(window));
   const existing = geometryTimers.get(reason);
@@ -245,7 +482,10 @@ function attachWindowLifecycle(window: BrowserWindow): void {
       scheduleGeometrySynchronization(window, reason),
     );
   }
-  window.on("minimize", () => videoWindow?.hide());
+  window.on("minimize", () => {
+    videoWindow?.hide();
+    overlayWindow?.hide();
+  });
   window.webContents.on("before-input-event", (event, input) => {
     if (
       input.type === "keyDown" &&
@@ -254,6 +494,21 @@ function attachWindowLifecycle(window: BrowserWindow): void {
     ) {
       event.preventDefault();
       toggleMainWindowFullscreen();
+      return;
+    }
+    if (input.type === "keyDown" && input.key === "F8" && !input.isAutoRepeat) {
+      event.preventDefault();
+      applyOverlayAction("toggle");
+      return;
+    }
+    if (
+      input.type === "keyDown" &&
+      input.key === "Enter" &&
+      !input.isAutoRepeat &&
+      !overlayState.visible
+    ) {
+      event.preventDefault();
+      showOverlay(true, "keyboard-enter");
       return;
     }
     if (input.type === "keyDown" && input.key === "F9" && !input.isAutoRepeat) {
@@ -274,10 +529,33 @@ function attachWindowLifecycle(window: BrowserWindow): void {
   window.on("closed", () => {
     for (const timer of geometryTimers.values()) clearTimeout(timer);
     geometryTimers.clear();
+    clearOverlayAutoHide();
+    if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.close();
+    overlayWindow = null;
     if (videoWindow && !videoWindow.isDestroyed()) videoWindow.close();
     videoWindow = null;
     if (mainWindow === window) mainWindow = null;
   });
+}
+
+function secureLocalRenderer(window: BrowserWindow): void {
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event) => event.preventDefault());
+}
+
+function loadRendererSurface(
+  window: BrowserWindow,
+  surface: "overlay" | "shell",
+): void {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const rendererUrl = new URL(process.env.ELECTRON_RENDERER_URL);
+    rendererUrl.searchParams.set("surface", surface);
+    void window.loadURL(rendererUrl.toString());
+  } else {
+    void window.loadFile(join(__dirname, "../renderer/index.html"), {
+      query: { surface },
+    });
+  }
 }
 
 function createVideoWindow(parent: BrowserWindow): BaseWindow {
@@ -301,19 +579,48 @@ function createVideoWindow(parent: BrowserWindow): BaseWindow {
   return window;
 }
 
+function createOverlayWindow(parent: BrowserWindow): BrowserWindow {
+  const window = new BrowserWindow({
+    ...createOverlayWindowOptions(join(__dirname, "../preload/index.js")),
+    ...parent.getContentBounds(),
+    parent,
+  });
+  secureLocalRenderer(window);
+  window.setIgnoreMouseEvents(true, { forward: true });
+  window.webContents.on("did-finish-load", () => publishOverlayState());
+  window.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || input.isAutoRepeat) return;
+    if (input.key === "Escape") {
+      event.preventDefault();
+      hideOverlay("keyboard-back", true);
+    } else if (input.key === "F8") {
+      event.preventDefault();
+      applyOverlayAction("toggle");
+    } else if (input.key === "F11") {
+      event.preventDefault();
+      toggleMainWindowFullscreen();
+    }
+  });
+  window.on("closed", () => {
+    if (overlayWindow === window) overlayWindow = null;
+  });
+  loadRendererSurface(window, "overlay");
+  return window;
+}
+
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow(
     createMainWindowOptions(join(__dirname, "../preload/index.js")),
   );
   mainWindow = window;
   videoWindow = createVideoWindow(window);
+  overlayWindow = createOverlayWindow(window);
   attachWindowLifecycle(window);
 
-  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  window.webContents.on("will-navigate", (event) => event.preventDefault());
+  secureLocalRenderer(window);
   window.once("ready-to-show", () => {
     window.show();
-    alignVideoWindow(window);
+    alignNativeLayers(window);
 
     if (process.env.COAX_SMOKE_TEST === "1") {
       console.log(
@@ -326,16 +633,33 @@ function createMainWindow(): BrowserWindow {
     }
   });
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void window.loadURL(process.env.ELECTRON_RENDERER_URL);
-  } else {
-    void window.loadFile(join(__dirname, "../renderer/index.html"));
-  }
+  loadRendererSurface(window, "shell");
 
   return window;
 }
 
-async function startSlice3Playback(
+function handleMpvPlaybackStatus(event: MpvPlaybackStatusEvent): void {
+  if (event.kind === "playing") {
+    transitionOverlayState({ generation: event.generation, type: "playing" });
+    if (overlayState.visible && !overlayState.focused)
+      scheduleFeedbackAutoHide();
+    return;
+  }
+  const feedback =
+    event.reason === "cache-paused"
+      ? "Buffering playback"
+      : event.reason === "ipc-heartbeat-timeout"
+        ? "Playback unresponsive · reconnecting"
+        : "Reconnecting playback";
+  transitionOverlayState({
+    feedback,
+    generation: event.generation,
+    type: "recovering",
+  });
+  showOverlay(false, `recovery-${event.reason}`);
+}
+
+async function startSlice4Playback(
   window: BrowserWindow,
   nativeVideoHost: BaseWindow,
 ): Promise<void> {
@@ -380,12 +704,14 @@ async function startSlice3Playback(
       playbackLogger,
       nativeWindowId,
       join(applicationRoot, "scripts", "raise-mpv-child-window.ps1"),
+      handleMpvPlaybackStatus,
     );
     await mpvController.start(input);
     videoPlaybackReady = true;
     scheduleGeometrySynchronization(window, "ready");
   } catch {
     videoPlaybackReady = false;
+    transitionOverlayState({ type: "unavailable" });
     if (!nativeVideoHost.isDestroyed()) nativeVideoHost.hide();
     playbackLogger.write("playback-startup-failed", 1, {
       reason: "runtime-or-mpv-startup-failure",
@@ -411,7 +737,25 @@ void app.whenReady().then(() => {
   const window = createMainWindow();
   const nativeVideoHost = videoWindow;
   if (!nativeVideoHost) throw new Error("native-video-host-unavailable");
-  playbackStartup = startSlice3Playback(window, nativeVideoHost);
+  playbackStartup = startSlice4Playback(window, nativeVideoHost);
+
+  powerMonitor.on("resume", () => {
+    const current = mainWindow;
+    if (!current || current.isDestroyed()) return;
+    transitionOverlayState({
+      feedback: "Resuming playback",
+      generation: overlayState.generation,
+      type: "recovering",
+    });
+    showOverlay(false, "display-resume");
+    scheduleGeometrySynchronization(current, "restore");
+  });
+  screen.on("display-metrics-changed", () => {
+    const current = mainWindow;
+    if (current && !current.isDestroyed()) {
+      scheduleGeometrySynchronization(current, "resize");
+    }
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
@@ -432,6 +776,9 @@ app.on("child-process-gone", (_event, details) => {
   setTimeout(() => {
     if (window.isDestroyed()) return;
     window.webContents.reload();
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.reload();
+    }
     scheduleGeometrySynchronization(window, "gpu-process-restored");
   }, 250);
 });

@@ -1,6 +1,6 @@
 # Coax
 
-Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0a Slice 3: embedding and lifecycle**: the secure Electron/React foundation plus a pinned Windows x64 mpv child embedded into the Electron window and controlled through JSON IPC. There is no overlay, provider integration, GPU tuning, full recovery supervisor, or credential UI yet.
+Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0a Slice 4: the overlay decision gate**: the secure Electron/React foundation, a pinned Windows x64 mpv child embedded into the Electron window and controlled through JSON IPC, and the Path A interactive Electron playback overlay. Path A passed every row available on the current native hardware, but M0a remains incomplete until controller and multi-monitor/DPI coverage are observed. There is no provider integration, GPU tuning, full recovery supervisor, or credential UI yet.
 
 ## Versions
 
@@ -153,8 +153,26 @@ The harness independently matches mpv's decimal `--wid` value to the live Electr
 
 The automatic checks do not replace visual observation. Type `YES` only after completing and observing each requested matrix row. A pass must not be claimed from WSL checks or unconfirmed prompts. Raw results remain only under the ignored native `artifacts/m0/<run-id>/` tree.
 
+## Native Slice 4 acceptance
+
+At the start of a Slice 4 run, record the exact available controller model and connection mode. When no controller is present, keep the controller row open and run the independent keyboard path; do not substitute an invented controller result.
+
+After normal clean checks, runtime reverification, and WSL-to-NTFS synchronization, run the interactive Path A harness from the protected native mirror:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice4-acceptance.ps1 -SkipInstall
+```
+
+When a controller is available, pass its exact identity explicitly, for example:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice4-acceptance.ps1 -SkipInstall -ControllerModel '<exact model>' -ControllerConnectionMode Bluetooth
+```
+
+The harness exercises the quantified Slice 3 matrix with the overlay, ten show/hide and focus-transfer cycles, intentional pointer click-through, independent keyboard navigation, optional recorded-controller navigation, fixed now/next plus immediate zap/recovery feedback, generation-safe rapid changes, controlled mpv replacement, privacy checks, and clean process/pipe shutdown. It records unavailable controller and monitor/DPI hardware as explicit open criteria rather than a pass. Type `YES` only after completing and observing every available requested row. Raw results remain only under ignored `artifacts/m0/<run-id>/`.
+
 ## Process boundary
 
-Electron main owns the shell, an opaque non-focusable native video host parented to that shell, HWND conversion, mpv lifecycle, private playback input, structured playback log, and typed renderer IPC handlers. mpv receives the video-host HWND and private pipe in process arguments but receives the playlist only through post-connect `loadfile` IPC. Windows child-window parenting supplies clipping; Electron main aligns the host and records settled geometry after move, resize, restore, maximise, and fullscreen events. A fixed native helper keeps mpv's child above Electron's own Direct3D child inside that host without receiving playback input or IPC details. One IPC-heartbeat failure or unexpected process exit can start one controlled replacement attempt for the current generation. Electron GPU-process loss is logged and causes a bounded shell reload plus geometry and stacking resynchronization.
+Electron main owns the shell, an opaque non-focusable native video host parented to that shell, a transparent owned overlay window, HWND conversion, mpv lifecycle, private playback input, structured playback log, and typed renderer IPC handlers. mpv receives the video-host HWND and private pipe in process arguments but receives the playlist only through post-connect `loadfile` IPC. Windows child-window parenting supplies clipping; Electron main aligns both native layers and records settled geometry after move, resize, restore, maximise, fullscreen, display-metric, and display-resume events. The overlay is non-resizable, frameless, transparent, absent from the taskbar, and OS-level pointer-click-through outside its intentional control panel. A fixed native helper keeps mpv's child above Electron's own Direct3D child inside the video host without receiving playback input or IPC details. One IPC-heartbeat failure or unexpected process exit can start one controlled replacement attempt for the current generation. Electron GPU-process loss is logged and causes bounded renderer reloads plus geometry and stacking resynchronization.
 
-The sandboxed, context-isolated preload exposes only runtime versions, fixed Previous/Next and 30-change development intents, and fullscreen toggle. The renderer has no Node integration and never receives raw `ipcRenderer`, arbitrary mpv commands, pipe names, URLs, or playlist data. Unit tests lock the BrowserWindow security preferences and the manifest, handle conversion, generation decisions, geometry/lifecycle decisions, fixed commands, JSON-line parsing, input validation, playlist navigation, and redaction logic.
+Both renderers remain sandboxed, context-isolated, Node-disabled, and local-code-only. The preload exposes only runtime versions, fixed Previous/Next and 30-change development intents, fullscreen toggle, fixed overlay show/hide/toggle and pointer-region intents, and sanitized placeholder/feedback state. No renderer receives raw `ipcRenderer`, arbitrary mpv commands, pipe names, HWNDs, URLs, or playlist data. Unit tests lock both BrowserWindow security configurations and cover the manifest, handle conversion, generation decisions, overlay state, standard D-pad/accept/back mapping, geometry/lifecycle decisions, fixed commands, JSON-line parsing, input validation, playlist navigation, and redaction logic.

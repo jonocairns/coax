@@ -24,3 +24,26 @@ export function createMainWindowOptions(
     },
   };
 }
+
+export function createOverlayWindowOptions(
+  preloadPath: string,
+): BrowserWindowConstructorOptions {
+  return {
+    width: 960,
+    height: 540,
+    show: false,
+    backgroundColor: "#00000000",
+    focusable: true,
+    frame: false,
+    hasShadow: false,
+    movable: false,
+    resizable: false,
+    roundedCorners: false,
+    skipTaskbar: true,
+    transparent: true,
+    webPreferences: {
+      ...SECURE_WEB_PREFERENCES,
+      preload: preloadPath,
+    },
+  };
+}

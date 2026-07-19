@@ -1,15 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import type { RuntimeVersions } from "../../shared/api";
+import type { ControllerNavigationAction } from "../../shared/controller-navigation";
 import { shouldApplyGeneration } from "../../shared/generation";
+import type { OverlayState } from "../../shared/overlay";
+import { useControllerNavigation } from "./use-controller-navigation";
 
 export function App(): React.JSX.Element {
   const [versions, setVersions] = useState<RuntimeVersions | null>(null);
   const [testChannel, setTestChannel] = useState<string>("Playlist channel");
+  const [overlay, setOverlay] = useState<OverlayState | null>(null);
   const displayedGeneration = useRef(0);
 
   useEffect(() => {
     void window.coax.getRuntimeVersions().then(setVersions);
+    void window.coax.getOverlayState().then(setOverlay);
+    return window.coax.onOverlayState(setOverlay);
   }, []);
+
+  function handleControllerAction(action: ControllerNavigationAction): void {
+    if (action !== "back" && !overlay?.visible) {
+      void window.coax.requestOverlayAction("show");
+    }
+  }
+
+  useControllerNavigation(handleControllerAction);
 
   async function cycleChannel(direction: "next" | "previous"): Promise<void> {
     try {
@@ -48,9 +62,12 @@ export function App(): React.JSX.Element {
 
   return (
     <main>
-      <p className="eyebrow">M0a · Slice 3</p>
+      <p className="eyebrow">M0a · Slice 4 · Path A</p>
       <h1>Coax</h1>
-      <p>Electron shell ready. Native playback is embedded in this window.</p>
+      <p>
+        Native playback is embedded with a separate interactive Electron
+        overlay.
+      </p>
       <section aria-label="Private test stream controls">
         <p>{testChannel}</p>
         <div className="controls">
@@ -69,7 +86,17 @@ export function App(): React.JSX.Element {
           >
             Toggle fullscreen
           </button>
+          <button
+            type="button"
+            onClick={() => void window.coax.requestOverlayAction("show")}
+          >
+            Show playback overlay
+          </button>
         </div>
+        <p>
+          Overlay: {overlay?.visible ? "visible" : "hidden"}. Press Enter or F8
+          to open; Escape or Back returns focus to the shell.
+        </p>
       </section>
       {versions ? (
         <dl aria-label="Runtime versions">
