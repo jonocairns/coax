@@ -1,6 +1,6 @@
 # Coax
 
-Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0a Slice 2: first native frame**: the secure Electron/React foundation plus a pinned Windows x64 mpv child controlled through JSON IPC. mpv remains a separate window. There is no embedding, overlay, provider integration, GPU tuning, recovery supervisor, or credential UI yet.
+Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0a Slice 3: embedding and lifecycle**: the secure Electron/React foundation plus a pinned Windows x64 mpv child embedded into the Electron window and controlled through JSON IPC. There is no overlay, provider integration, GPU tuning, full recovery supervisor, or credential UI yet.
 
 ## Versions
 
@@ -108,7 +108,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\fetch-mpv-runtime.
 
 The script downloads only the manifest URL, verifies SHA-256 and size before extraction, then records hashes tying the extracted `mpv.exe` and manifest to that verified archive. Electron recomputes those hashes before every spawn. The ignored archive and runtime tree live under `runtime/mpv/downloads/` and `runtime/mpv/bin/`; never commit either. Dependency and redistribution-license review remains required before publication.
 
-## Private Slice 2 playback input
+## Private M0a playback input
 
 Copy the safe template to the exact ignored path below on the native NTFS mirror, then edit that local file only:
 
@@ -125,9 +125,9 @@ The schema is:
 }
 ```
 
-Configure one privately configured HTTP(S) playlist URL containing the test channels. Do not paste the real URL into chat, a shell command, an issue, evidence, or any tracked file. `config/local/playback.json` is ignored and read only by Electron main. The renderer receives only Previous/Next intent; it never receives the URL or playlist contents. Electron spawns mpv without the URL and sends the playlist only in a `loadfile` JSON IPC command after connecting to a random per-process named pipe.
+Configure one privately configured HTTP(S) playlist URL containing the test channels. Do not paste the real URL into chat, a shell command, an issue, evidence, or any tracked file. `config/local/playback.json` is ignored and read only by Electron main. The renderer receives only fixed development playback and window intents; it never receives the URL or playlist contents. Electron spawns mpv without the URL and sends the playlist only in a `loadfile` JSON IPC command after connecting to a random per-process named pipe.
 
-The Previous and Next buttons in the Coax window issue fixed `playlist-prev` and `playlist-next` commands against mpv's internal playlist. They work only when the configured URL resolves to a playlist mpv recognizes with multiple entries; a direct single-channel media URL has no other entry to select. This is a development-only comparison control, not provider parsing or rapid-zap supervision. Sanitized events include the generation and fixed `paused-for-cache` property so brief play/freeze cycles can be distinguished from process or IPC failure.
+The fixed Previous and Next development intents issue `playlist-prev` and `playlist-next` commands against mpv's internal playlist. They are available from the native Playback menu and the narrow renderer API, and work only when the configured URL resolves to a playlist mpv recognizes with multiple entries; a direct single-channel media URL has no other entry to select. This is a development-only comparison control, not provider parsing or the M1 rapid-zap supervisor. Slice 3 tags every fixed playlist step with a monotonic generation, ignores stale command results, and asserts the newest successful request against mpv's numeric `playlist-pos` without exposing playlist contents. The fixed 30-change acceptance action alternates Next/Previous and is available from the native menu, renderer intent, or F9. F11 toggles fullscreen for lifecycle testing.
 
 ## Native Slice 2 acceptance
 
@@ -141,6 +141,20 @@ The harness waits for `start-file`, `file-loaded`, `playback-restart`, `video-re
 
 Raw results stay under ignored `artifacts/m0/<run-id>/`. Review and sanitize a small summary into `docs/evidence/m0/`; never copy raw provider output or copyrighted frames there.
 
+## Native Slice 3 acceptance
+
+After normal clean checks and runtime reverification, run the interactive Slice 3 harness from the protected native NTFS mirror:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice3-acceptance.ps1 -SkipInstall
+```
+
+The harness independently matches mpv's decimal `--wid` value to the live Electron top-level HWND, checks that the verified bundled executable and a fresh unpredictable pipe are used, and guides the exact interaction matrix from `docs/M0_IMPLEMENTATION.md`: move/resize, ten fullscreen cycles, five available-monitor/DPI round trips, ten Alt+Tab cycles, ten minimise/restore cycles, display sleep/resume, and thirty rapid alternating playlist changes. It then kills the owned mpv process, requires a controlled replacement attempt to begin within one second, and verifies bounded shutdown leaves none of the owned processes or pipes reachable.
+
+The automatic checks do not replace visual observation. Type `YES` only after completing and observing each requested matrix row. A pass must not be claimed from WSL checks or unconfirmed prompts. Raw results remain only under the ignored native `artifacts/m0/<run-id>/` tree.
+
 ## Process boundary
 
-Electron main owns the window, mpv lifecycle, private playback input, structured playback log, and typed renderer IPC handlers. The sandboxed, context-isolated preload exposes only `getRuntimeVersions()` and the narrow `cycleTestChannel()` intent; the renderer has no Node integration and never receives raw `ipcRenderer`, arbitrary mpv commands, pipe names, or stream data. Unit tests lock the BrowserWindow security preferences and the manifest, command, JSON-line, input, playlist-navigation, and redaction logic.
+Electron main owns the shell, an opaque non-focusable native video host parented to that shell, HWND conversion, mpv lifecycle, private playback input, structured playback log, and typed renderer IPC handlers. mpv receives the video-host HWND and private pipe in process arguments but receives the playlist only through post-connect `loadfile` IPC. Windows child-window parenting supplies clipping; Electron main aligns the host and records settled geometry after move, resize, restore, maximise, and fullscreen events. A fixed native helper keeps mpv's child above Electron's own Direct3D child inside that host without receiving playback input or IPC details. One IPC-heartbeat failure or unexpected process exit can start one controlled replacement attempt for the current generation. Electron GPU-process loss is logged and causes a bounded shell reload plus geometry and stacking resynchronization.
+
+The sandboxed, context-isolated preload exposes only runtime versions, fixed Previous/Next and 30-change development intents, and fullscreen toggle. The renderer has no Node integration and never receives raw `ipcRenderer`, arbitrary mpv commands, pipe names, URLs, or playlist data. Unit tests lock the BrowserWindow security preferences and the manifest, handle conversion, generation decisions, geometry/lifecycle decisions, fixed commands, JSON-line parsing, input validation, playlist navigation, and redaction logic.

@@ -48,7 +48,7 @@ function createRunId(): string {
   if (requested && /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(requested)) {
     return requested;
   }
-  return `slice2-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}`;
+  return `slice3-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}`;
 }
 
 export class StructuredPlaybackLogger {
@@ -61,7 +61,7 @@ export class StructuredPlaybackLogger {
   constructor(applicationRoot: string) {
     this.runId = createRunId();
     const directory = join(applicationRoot, "artifacts", "m0", this.runId);
-    this.filePath = join(directory, "slice2-events.jsonl");
+    this.filePath = join(directory, "playback-events.jsonl");
     this.pending = mkdir(directory, { recursive: true }).then(() => undefined);
   }
 

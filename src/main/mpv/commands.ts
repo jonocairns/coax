@@ -10,9 +10,15 @@ export function createMpvPipeName(processId: number): string {
   return `\\\\.\\pipe\\coax-mpv-${processId}-${nonce}`;
 }
 
-export function buildMpvArguments(pipeName: string): readonly string[] {
+export function buildMpvArguments(
+  pipeName: string,
+  nativeWindowId: string,
+): readonly string[] {
   if (!/^\\\\\.\\pipe\\coax-mpv-\d+-[a-f0-9]{48}$/.test(pipeName)) {
     throw new Error("invalid-mpv-pipe-name");
+  }
+  if (!/^[1-9]\d{0,19}$/.test(nativeWindowId)) {
+    throw new Error("invalid-native-window-id");
   }
 
   return [
@@ -25,6 +31,7 @@ export function buildMpvArguments(pipeName: string): readonly string[] {
     "--input-cursor=no",
     "--osc=no",
     "--osd-level=0",
+    `--wid=${nativeWindowId}`,
     `--input-ipc-server=${pipeName}`,
   ];
 }
@@ -65,6 +72,16 @@ export function createPlaylistStepCommand(
       direction === "next" ? "playlist-next" : "playlist-prev",
       "force",
     ],
+    request_id: requestId,
+  };
+}
+
+export function createGetPropertyCommand(
+  property: "osd-height" | "osd-width" | "pid" | "playlist-pos",
+  requestId: number,
+): MpvCommand {
+  return {
+    command: ["get_property", property],
     request_id: requestId,
   };
 }

@@ -119,7 +119,7 @@ try {
         $env:COAX_M0_RUN_ID = $previousRunId
     }
 
-    $logPath = Join-Path $runDirectory 'slice2-events.jsonl'
+    $logPath = Join-Path $runDirectory 'playback-events.jsonl'
     $requiredPlaybackEvents = @('start-file', 'file-loaded', 'playback-restart', 'video-reconfig', 'audio-reconfig')
     Wait-Until -TimeoutSeconds $PlaybackTimeoutSeconds -FailureMessage 'Timed out waiting for all required playback events.' -Condition {
         $recorded = Get-RecordedEvents $logPath

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMpvArguments,
+  createGetPropertyCommand,
   createLoadfileCommand,
   createMpvPipeName,
   createObservePropertyCommand,
@@ -13,7 +14,7 @@ describe("mpv command construction", () => {
     const firstPipe = createMpvPipeName(1234);
     const secondPipe = createMpvPipeName(1234);
     const streamUrl = "https://user:password@example.invalid/live?id=secret";
-    const arguments_ = buildMpvArguments(firstPipe);
+    const arguments_ = buildMpvArguments(firstPipe, "4294967297");
 
     expect(firstPipe).toMatch(/^\\\\\.\\pipe\\coax-mpv-1234-[a-f0-9]{48}$/);
     expect(secondPipe).not.toBe(firstPipe);
@@ -21,7 +22,15 @@ describe("mpv command construction", () => {
       false,
     );
     expect(arguments_).toContain("--no-config");
+    expect(arguments_).toContain("--wid=4294967297");
     expect(arguments_).toContain(`--input-ipc-server=${firstPipe}`);
+  });
+
+  it("constructs only fixed diagnostic property reads", () => {
+    expect(createGetPropertyCommand("playlist-pos", 103)).toEqual({
+      command: ["get_property", "playlist-pos"],
+      request_id: 103,
+    });
   });
 
   it("places the private stream only in a newline-delimited loadfile IPC command", () => {
