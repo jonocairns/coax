@@ -9,7 +9,10 @@ Recorded sanitized summaries:
 - [`2026-07-19-slice2-windows.md`](2026-07-19-slice2-windows.md) — native bundled-mpv playback, internal-playlist navigation, event/redaction checks, and clean process/pipe result
 - [`2026-07-19-slice3-windows.md`](2026-07-19-slice3-windows.md) — embedded native-host lifecycle matrix, generation/replacement checks, and the explicitly open single-monitor/DPI row
 - [`2026-07-19-slice4-windows.md`](2026-07-19-slice4-windows.md) — Path A overlay selection, available native interaction matrix, and the explicitly open controller and monitor/DPI rows
+- [`2026-07-20-slice5-windows.md`](2026-07-20-slice5-windows.md) — native safeStorage import, real provider/category/channel and MPEG-TS playback results, HLS not exposed, and native invalid-auth explicitly open
 
 Slice 4 uses `scripts/windows-slice4-acceptance.ps1` for its ignored raw results. Its sanitized summary must retain unavailable controller and monitor/DPI criteria as open and must not call the native M0a gate complete until every required row has been observed.
+
+Slice 5 uses `scripts/windows-slice5-acceptance.ps1`. When no ignored Xtream input is available, its raw result records the native provider rows as unobserved rather than inferring a pass from synthetic fixtures. A sanitized provider pass requires observed native categories/channels, available TS/HLS playback and timings, structural redaction checks, newest-request-wins behavior, and clean shutdown without retaining private values.
 
 Slice 2 uses `scripts/windows-slice2-acceptance.ps1` to create ignored raw evidence. Add a sanitized Slice 2 summary here only after the native target has confirmed visible video, audible audio, required events, redaction, and clean process/pipe shutdown. Linux or WSL playback is not acceptance evidence.

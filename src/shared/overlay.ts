@@ -22,6 +22,11 @@ export type OverlayStateEvent =
       type: "zap";
     }
   | {
+      channelName: string;
+      generation: number;
+      type: "channel-zap";
+    }
+  | {
       generation: number;
       type: "playing";
     }
@@ -64,6 +69,15 @@ export function reduceOverlayState(
         ...state,
         feedback: `${event.direction === "next" ? "Next" : "Previous"} channel requested`,
         generation: event.generation,
+        phase: "zapping",
+        visible: true,
+      };
+    case "channel-zap":
+      return {
+        ...state,
+        feedback: "Channel requested",
+        generation: event.generation,
+        now: event.channelName,
         phase: "zapping",
         visible: true,
       };

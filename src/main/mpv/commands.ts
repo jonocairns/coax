@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { MpvPlaybackInput } from "./playback-input";
 
 export interface MpvCommand {
   command: readonly unknown[];
@@ -37,11 +38,26 @@ export function buildMpvArguments(
 }
 
 export function createLoadfileCommand(
-  streamUrl: string,
+  input: MpvPlaybackInput,
   generation: number,
 ): MpvCommand {
+  const options: Record<string, string> = {};
+  if (input.http?.userAgent) options["user-agent"] = input.http.userAgent;
+  if (input.http?.referer) options.referrer = input.http.referer;
+  const fields = Object.entries(input.http?.headers ?? {}).map(
+    ([name, value]) => `${name}: ${value}`,
+  );
+  if (input.http?.cookie) fields.push(`Cookie: ${input.http.cookie}`);
+  if (fields.length > 0) {
+    options["http-header-fields"] = fields
+      .map((field) => field.replace(/\\/g, "\\\\").replace(/,/g, "\\,"))
+      .join(",");
+  }
   return {
-    command: ["loadfile", streamUrl, "replace"],
+    command:
+      Object.keys(options).length === 0
+        ? ["loadfile", input.streamUrl, "replace"]
+        : ["loadfile", input.streamUrl, "replace", -1, options],
     request_id: generation,
   };
 }

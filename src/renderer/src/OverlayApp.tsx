@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ControllerNavigationAction } from "../../shared/controller-navigation";
 import { INITIAL_OVERLAY_STATE, type OverlayState } from "../../shared/overlay";
 import { useControllerNavigation } from "./use-controller-navigation";
+import { ProviderBrowser } from "./ProviderBrowser";
 
 export function OverlayApp(): React.JSX.Element {
   const [state, setState] = useState<OverlayState>({
@@ -107,6 +108,7 @@ export function OverlayApp(): React.JSX.Element {
             Back
           </button>
         </div>
+        {state.focused && <ProviderBrowser compact />}
       </section>
     </main>
   );

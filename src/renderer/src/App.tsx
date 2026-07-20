@@ -4,6 +4,7 @@ import type { ControllerNavigationAction } from "../../shared/controller-navigat
 import { shouldApplyGeneration } from "../../shared/generation";
 import type { OverlayState } from "../../shared/overlay";
 import { useControllerNavigation } from "./use-controller-navigation";
+import { ProviderBrowser } from "./ProviderBrowser";
 
 export function App(): React.JSX.Element {
   const [versions, setVersions] = useState<RuntimeVersions | null>(null);
@@ -61,8 +62,8 @@ export function App(): React.JSX.Element {
   }
 
   return (
-    <main>
-      <p className="eyebrow">M0a · Slice 4 · Path A</p>
+    <main className="shell-surface">
+      <p className="eyebrow">M0b · Slice 5 · Xtream vertical slice</p>
       <h1>Coax</h1>
       <p>
         Native playback is embedded with a separate interactive Electron
@@ -98,6 +99,7 @@ export function App(): React.JSX.Element {
           to open; Escape or Back returns focus to the shell.
         </p>
       </section>
+      <ProviderBrowser />
       {versions ? (
         <dl aria-label="Runtime versions">
           <div>

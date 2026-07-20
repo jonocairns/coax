@@ -35,12 +35,44 @@ describe("mpv command construction", () => {
 
   it("places the private stream only in a newline-delimited loadfile IPC command", () => {
     const streamUrl = "https://example.invalid/private/live.m3u8?token=secret";
-    const serialized = serializeMpvCommand(createLoadfileCommand(streamUrl, 7));
+    const serialized = serializeMpvCommand(
+      createLoadfileCommand({ streamUrl, transport: "https" }, 7),
+    );
 
     expect(serialized.endsWith("\n")).toBe(true);
     expect(JSON.parse(serialized)).toEqual({
       command: ["loadfile", streamUrl, "replace"],
       request_id: 7,
+    });
+  });
+
+  it("scopes provider headers and cookies to per-file options, never process arguments", () => {
+    const command = createLoadfileCommand(
+      {
+        channelId: "xch_111111111111111111111111",
+        http: {
+          cookie: "session=fixture",
+          headers: { "X-Fixture": "one,two" },
+          referer: "https://referer.invalid/",
+          userAgent: "Fixture agent",
+        },
+        streamUrl: "https://provider.invalid/live/fixture.ts",
+        transport: "mpeg-ts",
+      },
+      8,
+    );
+    const options = command.command[4] as Record<string, string>;
+
+    expect(command.command.slice(0, 4)).toEqual([
+      "loadfile",
+      "https://provider.invalid/live/fixture.ts",
+      "replace",
+      -1,
+    ]);
+    expect(options).toMatchObject({
+      "http-header-fields": "X-Fixture: one\\,two,Cookie: session=fixture",
+      referrer: "https://referer.invalid/",
+      "user-agent": "Fixture agent",
     });
   });
 

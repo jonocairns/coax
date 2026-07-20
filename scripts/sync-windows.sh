@@ -97,6 +97,7 @@ sync_once() {
     --include='/config/' \
     --include='/config/local/' \
     --include='/config/local/playback.example.json' \
+    --include='/config/local/xtream.example.json' \
     --exclude='/config/local/***' \
     --exclude='/runtime/mpv/bin/' \
     --exclude='/runtime/mpv/downloads/' \

@@ -26,6 +26,7 @@ credentials/
 secrets/
 config/local/*
 !config/local/playback.example.json
+!config/local/xtream.example.json
 
 # Downloaded runtime files (the manifest and schema remain tracked)
 runtime/mpv/bin/

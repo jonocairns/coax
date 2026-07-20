@@ -48,7 +48,7 @@ function createRunId(): string {
   if (requested && /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(requested)) {
     return requested;
   }
-  return `slice3-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}`;
+  return `slice5-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}`;
 }
 
 export class StructuredPlaybackLogger {

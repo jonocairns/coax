@@ -6,6 +6,20 @@ export interface LocalPlaybackInput {
   transport: "http" | "https";
 }
 
+export interface MpvHttpOptions {
+  cookie?: string;
+  headers: Readonly<Record<string, string>>;
+  referer?: string;
+  userAgent?: string;
+}
+
+export interface MpvPlaybackInput {
+  channelId?: string;
+  http?: MpvHttpOptions;
+  streamUrl: string;
+  transport: "hls" | "http" | "https" | "mpeg-ts";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

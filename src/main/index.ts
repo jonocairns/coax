@@ -7,6 +7,7 @@ import {
   ipcMain,
   Menu,
   powerMonitor,
+  safeStorage,
   screen,
 } from "electron";
 import {
@@ -15,6 +16,13 @@ import {
   type RapidPlaylistTestResult,
   type RuntimeVersions,
 } from "../shared/api";
+import {
+  INTERNAL_CHANNEL_ID_PATTERN,
+  type ChannelPlaybackIntentResult,
+  type ProviderFailureKind,
+  type ProviderViewState,
+  type RapidProviderPlaybackResult,
+} from "../shared/provider";
 import {
   INITIAL_OVERLAY_STATE,
   reduceOverlayState,
@@ -27,6 +35,10 @@ import { readLocalPlaybackInput } from "./mpv/playback-input";
 import { loadVerifiedMpvRuntime } from "./mpv/runtime-manifest";
 import { StructuredPlaybackLogger } from "./mpv/structured-log";
 import { nativeWindowHandleToWid } from "./native-window";
+import { XtreamUtilityClient } from "./provider/client";
+import { XtreamCredentialService } from "./provider/credentials";
+import { XtreamProviderSession } from "./provider/session";
+import { ProviderRequestError } from "./provider/xtream";
 import {
   decideGeometrySynchronization,
   presentationState,
@@ -43,6 +55,9 @@ let overlayWindow: BrowserWindow | null = null;
 let videoPlaybackReady = false;
 let playbackLogger: StructuredPlaybackLogger | null = null;
 let mpvController: MpvController | null = null;
+let providerClient: XtreamUtilityClient | null = null;
+let providerSession: XtreamProviderSession | null = null;
+let providerState: ProviderViewState = { phase: "loading" };
 let playbackStartup: Promise<void> = Promise.resolve();
 let shutdownStarted = false;
 let shutdownComplete = false;
@@ -79,6 +94,47 @@ function publishOverlayState(): void {
     }
     window.webContents.send(IPC_CHANNELS.overlayStateChanged, overlayState);
   }
+}
+
+function publishProviderState(): void {
+  for (const window of [mainWindow, overlayWindow]) {
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+      continue;
+    }
+    window.webContents.send(IPC_CHANNELS.providerStateChanged, providerState);
+  }
+}
+
+function setProviderState(state: ProviderViewState): void {
+  providerState = state;
+  publishProviderState();
+}
+
+function providerFailure(error: unknown): {
+  code: string;
+  kind: ProviderFailureKind;
+  message: string;
+} {
+  let kind: ProviderFailureKind = "configuration";
+  let code = "provider-configuration-failed";
+  if (error instanceof ProviderRequestError) {
+    kind = error.kind;
+    code = /^[a-z0-9-]{1,64}$/.test(error.code)
+      ? error.code
+      : "provider-request-failed";
+  } else if (
+    error instanceof Error &&
+    /^[a-z0-9-]{1,64}$/.test(error.message)
+  ) {
+    code = error.message;
+  }
+  const message = {
+    authentication: "Provider authentication failed.",
+    configuration: "Provider configuration is unavailable.",
+    "provider-data": "Provider returned an invalid channel response.",
+    transport: "Provider could not be reached.",
+  }[kind];
+  return { code, kind, message };
 }
 
 function transitionOverlayState(event: OverlayStateEvent): void {
@@ -190,6 +246,24 @@ function requestPlaylistStep(
   return { direction, generation };
 }
 
+function providerZapFeedback(channelId: string, generation: number): void {
+  transitionOverlayState({
+    channelName: providerSession?.channelName(channelId) ?? "Live channel",
+    generation,
+    type: "channel-zap",
+  });
+  showOverlay(false, "provider-channel-feedback");
+  scheduleFeedbackAutoHide();
+  playbackLogger?.write("provider-channel-requested", generation, {
+    channelId,
+    transport:
+      providerState.phase === "ready"
+        ? (providerState.channels.find((channel) => channel.id === channelId)
+            ?.transport ?? "unknown")
+        : "unknown",
+  });
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.getRuntimeVersions, (event): RuntimeVersions => {
     if (!isKnownRenderer(event.sender.id))
@@ -201,6 +275,90 @@ function registerIpcHandlers(): void {
       throw new Error("untrusted-renderer");
     return overlayState;
   });
+  ipcMain.handle(IPC_CHANNELS.getProviderState, (event): ProviderViewState => {
+    if (!isKnownRenderer(event.sender.id))
+      throw new Error("untrusted-renderer");
+    return providerState;
+  });
+  ipcMain.handle(
+    IPC_CHANNELS.playProviderChannel,
+    async (event, channelId: unknown): Promise<ChannelPlaybackIntentResult> => {
+      if (!isKnownRenderer(event.sender.id))
+        throw new Error("untrusted-renderer");
+      if (
+        typeof channelId !== "string" ||
+        !INTERNAL_CHANNEL_ID_PATTERN.test(channelId)
+      ) {
+        throw new Error("invalid-provider-channel-id");
+      }
+      const session = providerSession;
+      if (!session) throw new Error("provider-not-ready");
+      try {
+        const result = await session.requestPlayback(channelId, (generation) =>
+          providerZapFeedback(channelId, generation),
+        );
+        if (result.accepted) {
+          videoPlaybackReady = true;
+          const window = currentWindow();
+          alignNativeLayers(window);
+        }
+        return result;
+      } catch (error) {
+        const failure = providerFailure(error);
+        playbackLogger?.write(
+          "provider-playback-failed",
+          overlayState.generation,
+          {
+            channelId,
+            reason: failure.code,
+            failureKind: failure.kind,
+          },
+        );
+        transitionOverlayState({
+          feedback: "Channel playback unavailable",
+          generation: overlayState.generation,
+          type: "recovering",
+        });
+        showOverlay(false, "provider-channel-failed");
+        throw new Error("provider-playback-unavailable", { cause: error });
+      }
+    },
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.runRapidProviderTest,
+    async (event): Promise<RapidProviderPlaybackResult> => {
+      if (!isKnownRenderer(event.sender.id))
+        throw new Error("untrusted-renderer");
+      const session = providerSession;
+      if (!session || providerState.phase !== "ready") {
+        throw new Error("provider-not-ready");
+      }
+      const candidates = providerState.channels.slice(0, 2);
+      if (candidates.length < 2) {
+        throw new Error("provider-channels-insufficient");
+      }
+      const requests = Array.from({ length: 30 }, (_, index) => {
+        const channel = candidates[index % candidates.length];
+        if (!channel) throw new Error("provider-channel-unavailable");
+        return session.requestPlayback(channel.id, (generation) =>
+          providerZapFeedback(channel.id, generation),
+        );
+      });
+      const results = await Promise.all(requests);
+      const final = results.at(-1);
+      if (!final) throw new Error("provider-rapid-test-empty");
+      if (final.accepted) {
+        videoPlaybackReady = true;
+        alignNativeLayers(currentWindow());
+      }
+      return {
+        acceptedCount: results.filter((result) => result.accepted).length,
+        finalChannelId: final.channelId,
+        finalGeneration: final.generation,
+        requestCount: 30,
+      };
+    },
+  );
   ipcMain.handle(
     IPC_CHANNELS.requestOverlayAction,
     (event, action: unknown): OverlayState => {
@@ -659,7 +817,7 @@ function handleMpvPlaybackStatus(event: MpvPlaybackStatusEvent): void {
   showOverlay(false, `recovery-${event.reason}`);
 }
 
-async function startSlice4Playback(
+async function startSlice5Playback(
   window: BrowserWindow,
   nativeVideoHost: BaseWindow,
 ): Promise<void> {
@@ -669,25 +827,52 @@ async function startSlice4Playback(
 
   const applicationRoot = app.getAppPath();
   playbackLogger = new StructuredPlaybackLogger(applicationRoot);
-  let input;
+  const credentials = new XtreamCredentialService(
+    safeStorage,
+    applicationRoot,
+    app.getPath("userData"),
+  );
+  let credentialStatus: "available" | "missing" = "missing";
   try {
-    input = await readLocalPlaybackInput(applicationRoot);
+    const result = await credentials.initialize();
+    credentialStatus = result.status;
+    playbackLogger.write("provider-credentials-initialized", 0, {
+      imported: result.imported,
+      status: result.status,
+    });
+  } catch (error) {
+    const failure = providerFailure(error);
+    setProviderState({ error: failure, phase: "error" });
+    playbackLogger.write("provider-credentials-failed", 0, {
+      failureKind: failure.kind,
+      reason: failure.code,
+    });
+  }
+
+  let input = null;
+  try {
+    if (credentialStatus === "missing") {
+      input = await readLocalPlaybackInput(applicationRoot);
+    }
   } catch {
     playbackLogger.write("playback-startup-failed", 0, {
       reason: "invalid-local-input",
     });
-    return;
   }
-  if (!input) {
-    playbackLogger.write("playback-input-missing", 0, {
-      reason: "local-input-not-configured",
-    });
-    return;
+  if (credentialStatus === "missing") {
+    if (!input) {
+      playbackLogger.write("playback-input-missing", 0, {
+        reason: "local-input-not-configured",
+      });
+    }
+    if (providerState.phase !== "error") {
+      setProviderState({ phase: "not-configured" });
+    }
   }
   try {
     window.show();
     nativeVideoHost.setBounds(window.getContentBounds(), false);
-    nativeVideoHost.showInactive();
+    if (input) nativeVideoHost.showInactive();
     await new Promise((resolve) => setTimeout(resolve, 100));
     const nativeWindowId = nativeWindowHandleToWid(
       nativeVideoHost.getNativeWindowHandle(),
@@ -706,9 +891,40 @@ async function startSlice4Playback(
       join(applicationRoot, "scripts", "raise-mpv-child-window.ps1"),
       handleMpvPlaybackStatus,
     );
-    await mpvController.start(input);
-    videoPlaybackReady = true;
-    scheduleGeometrySynchronization(window, "ready");
+    await mpvController.start(input ?? undefined);
+    videoPlaybackReady = input !== null;
+    if (videoPlaybackReady) scheduleGeometrySynchronization(window, "ready");
+    if (credentialStatus === "available") {
+      providerClient = new XtreamUtilityClient(
+        join(__dirname, "provider-worker.js"),
+      );
+      providerSession = new XtreamProviderSession(
+        credentials,
+        providerClient,
+        mpvController,
+      );
+      try {
+        setProviderState(await providerSession.refresh());
+        if (providerState.phase === "ready") {
+          playbackLogger.write("provider-catalog-loaded", 0, {
+            ...providerState.counts,
+            hlsVariants: providerState.channels.filter(
+              (channel) => channel.transport === "hls",
+            ).length,
+            mpegTsVariants: providerState.channels.filter(
+              (channel) => channel.transport === "mpeg-ts",
+            ).length,
+          });
+        }
+      } catch (error) {
+        const failure = providerFailure(error);
+        setProviderState({ error: failure, phase: "error" });
+        playbackLogger.write("provider-catalog-failed", 0, {
+          failureKind: failure.kind,
+          reason: failure.code,
+        });
+      }
+    }
   } catch {
     videoPlaybackReady = false;
     transitionOverlayState({ type: "unavailable" });
@@ -722,6 +938,8 @@ async function startSlice4Playback(
 async function shutdownOwnedProcesses(): Promise<void> {
   try {
     await playbackStartup;
+    providerClient?.close();
+    providerClient = null;
     await mpvController?.shutdown();
     await playbackLogger?.close();
   } finally {
@@ -737,7 +955,7 @@ void app.whenReady().then(() => {
   const window = createMainWindow();
   const nativeVideoHost = videoWindow;
   if (!nativeVideoHost) throw new Error("native-video-host-unavailable");
-  playbackStartup = startSlice4Playback(window, nativeVideoHost);
+  playbackStartup = startSlice5Playback(window, nativeVideoHost);
 
   powerMonitor.on("resume", () => {
     const current = mainWindow;

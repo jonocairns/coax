@@ -33,4 +33,25 @@ describe("playback log redaction", () => {
     expect(serialized).not.toContain("example.invalid");
     expect(serialized).not.toContain("session=secret");
   });
+
+  it("keeps provider success/failure records structural without payload shortcuts", () => {
+    const serialized = JSON.stringify(
+      sanitizeLogDetails({
+        authenticatedUrl:
+          "https://fixture-user:fixture-password@provider.invalid/live.ts",
+        cookie: "session=fixture-cookie",
+        failureKind: "authentication",
+        headers: "Authorization: fixture-token",
+        reason: "provider-authentication-rejected",
+      }),
+    );
+
+    expect(serialized).toContain("provider-authentication-rejected");
+    expect(serialized).toContain("authentication");
+    expect(serialized).not.toContain("fixture-user");
+    expect(serialized).not.toContain("fixture-password");
+    expect(serialized).not.toContain("fixture-cookie");
+    expect(serialized).not.toContain("fixture-token");
+    expect(serialized).not.toContain("provider.invalid");
+  });
 });

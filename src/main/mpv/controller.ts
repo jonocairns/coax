@@ -13,7 +13,7 @@ import {
   type MpvCommand,
 } from "./commands";
 import { JsonLineParser } from "./json-lines";
-import type { LocalPlaybackInput } from "./playback-input";
+import type { MpvPlaybackInput } from "./playback-input";
 import type { VerifiedMpvRuntime } from "./runtime-manifest";
 import {
   StructuredPlaybackLogger,
@@ -193,7 +193,7 @@ export class MpvController {
   private generation = 0;
   private confirmedGeneration = 0;
   private active: OwnedMpvInstance | null = null;
-  private input: LocalPlaybackInput | null = null;
+  private input: MpvPlaybackInput | null = null;
   private instanceSequence = 0;
   private requestSequence = 10_000;
   private readonly pendingCommands = new Map<number, PendingCommand>();
@@ -219,11 +219,11 @@ export class MpvController {
     ) => void = () => undefined,
   ) {}
 
-  async start(input: LocalPlaybackInput): Promise<void> {
-    this.input = input;
-    this.generation = 1;
+  async start(input?: MpvPlaybackInput): Promise<void> {
+    this.input = input ?? null;
+    this.generation = input ? 1 : 0;
     const instance = await this.spawnAndConnect("initial");
-    this.sendLoad(instance);
+    if (input) this.sendLoad(instance, input);
     this.replacementArmed = true;
   }
 
@@ -472,6 +472,9 @@ export class MpvController {
     if (decision !== "current" || result !== "success") return;
     if (pending.kind === "loadfile") {
       this.confirmedGeneration = pending.generation;
+      this.logger.write("mpv-generation-current", pending.generation, {
+        channelId: this.input?.channelId ?? "development-playlist",
+      });
       return;
     }
     if (pending.kind === "playlist-step") {
@@ -526,15 +529,34 @@ export class MpvController {
     return true;
   }
 
-  private sendLoad(instance: OwnedMpvInstance): void {
-    const input = this.input;
-    if (!input) throw new Error("playback-input-missing");
+  private sendLoad(instance: OwnedMpvInstance, input: MpvPlaybackInput): void {
     this.sendTracked(instance, "loadfile", this.generation, (id) =>
-      createLoadfileCommand(input.streamUrl, id),
+      createLoadfileCommand(input, id),
     );
     this.logger.write("mpv-load-requested", this.generation, {
+      channelId: input.channelId ?? "development-playlist",
       transport: input.transport,
     });
+  }
+
+  reserveGeneration(): number {
+    return ++this.generation;
+  }
+
+  isCurrentGeneration(generation: number): boolean {
+    return decideGeneration(this.generation, generation) === "current";
+  }
+
+  loadReserved(generation: number, input: MpvPlaybackInput): boolean {
+    if (!this.isCurrentGeneration(generation)) return false;
+    const instance = this.active;
+    if (!instance || !instance.socket?.writable || instance.processExited) {
+      throw new Error("mpv-not-ready");
+    }
+    this.input = input;
+    this.replacementAttempts = 0;
+    this.sendLoad(instance, input);
+    return true;
   }
 
   cyclePlaylist(direction: "next" | "previous"): number {
@@ -745,7 +767,7 @@ export class MpvController {
     });
     try {
       const instance = await this.spawnAndConnect("replacement");
-      this.sendLoad(instance);
+      this.sendLoad(instance, this.input);
       this.logger.write("mpv-replacement-connected", this.generation, {
         instanceId: instance.id,
       });

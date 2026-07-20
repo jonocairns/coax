@@ -1,6 +1,6 @@
 # Coax
 
-Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0a Slice 4: the overlay decision gate**: the secure Electron/React foundation, a pinned Windows x64 mpv child embedded into the Electron window and controlled through JSON IPC, and the Path A interactive Electron playback overlay. Path A passed every row available on the current native hardware, but M0a remains incomplete until controller and multi-monitor/DPI coverage are observed. There is no provider integration, GPU tuning, full recovery supervisor, or credential UI yet.
+Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0b Slice 5: the Xtream channel-to-video vertical slice**: the secure Electron/React foundation, a pinned Windows x64 mpv child embedded into the Electron window and controlled through JSON IPC, the selected Path A interactive overlay, and a minimal safeStorage-backed Xtream live-category/live-channel path. Path A passed every row available on the current native hardware, but the inherited controller and multi-monitor/DPI rows remain open. GPU tuning, EPG/SQLite, the full recovery supervisor, and production credential UX have not begun.
 
 ## Versions
 
@@ -129,6 +129,21 @@ Configure one privately configured HTTP(S) playlist URL containing the test chan
 
 The fixed Previous and Next development intents issue `playlist-prev` and `playlist-next` commands against mpv's internal playlist. They are available from the native Playback menu and the narrow renderer API, and work only when the configured URL resolves to a playlist mpv recognizes with multiple entries; a direct single-channel media URL has no other entry to select. This is a development-only comparison control, not provider parsing or the M1 rapid-zap supervisor. Slice 3 tags every fixed playlist step with a monotonic generation, ignores stale command results, and asserts the newest successful request against mpv's numeric `playlist-pos` without exposing playlist contents. The fixed 30-change acceptance action alternates Next/Previous and is available from the native menu, renderer intent, or F9. F11 toggles fullscreen for lifecycle testing.
 
+## Private Slice 5 Xtream input
+
+No production login form exists in Slice 5. On the protected native NTFS mirror, copy the tracked template to the ignored local path and edit it locally:
+
+```powershell
+Copy-Item .\config\local\xtream.example.json .\config\local\xtream.json
+notepad .\config\local\xtream.json
+```
+
+Set the provider base URL, username, password, and only the TS/HLS formats and HTTP settings the provider requires. `providerRequest` applies only to account/category/stream API calls; `playbackRequest` applies only to the selected mpv file. Remove unused User-Agent, Referer, header, and cookie fields rather than populating placeholders. Never paste the values into chat, shell arguments, evidence, or tracked files, and do not reinterpret `playback.json` as Xtream input.
+
+On the first normal native launch, Electron main validates the ignored input, encrypts it with `safeStorage`/Windows DPAPI, and atomically stores only the encrypted value in Electron's user-data directory. Later launches prefer that encrypted value and do not re-import a changed plaintext file. After confirming a successful import, the ignored plaintext file may be removed. An unavailable `safeStorage` backend is a configuration failure; Coax does not fall back to plaintext persistence.
+
+The provider utility process makes only account validation, `get_live_categories`, and `get_live_streams` requests. It returns normalized records to main, not provider payloads. The renderer receives category/channel names, stable internal IDs, transport labels, counts, and sanitized status only. Selecting a channel sends one internal ID to main; the authenticated stream URL and per-file HTTP options are resolved in the trusted utility/main boundary and sent to the already-running mpv process through its private JSON IPC pipe.
+
 ## Native Slice 2 acceptance
 
 After the normal clean checks and runtime fetch, run the interactive native acceptance harness from Windows PowerShell:
@@ -171,8 +186,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice4-acc
 
 The harness exercises the quantified Slice 3 matrix with the overlay, ten show/hide and focus-transfer cycles, intentional pointer click-through, independent keyboard navigation, optional recorded-controller navigation, fixed now/next plus immediate zap/recovery feedback, generation-safe rapid changes, controlled mpv replacement, privacy checks, and clean process/pipe shutdown. It records unavailable controller and monitor/DPI hardware as explicit open criteria rather than a pass. Type `YES` only after completing and observing every available requested row. Raw results remain only under ignored `artifacts/m0/<run-id>/`.
 
+## Native Slice 5 acceptance
+
+At the start of a Slice 5 run, the harness records only whether an ignored Xtream input and provider-exposed TS/HLS variants are available. It never records their values. From native Windows PowerShell in `C:\src\coax-win`, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice5-acceptance.ps1 -SkipInstall
+```
+
+With no Xtream input, the harness writes an ignored `unobserved` result and leaves provider/TS/HLS rows open. With suitable input, it waits for sanitized normalized/skipped counts, guides visible-video/audible-audio checks for each available transport, measures channel-intent-to-`playback-restart`, runs 30 asynchronous channel-ID requests, requires the newest generation to become current, scans actual mpv arguments and persisted structured logs for private values, and requires clean application shutdown. Raw output remains under ignored `artifacts/m0/<run-id>/`; only reviewed sanitized summaries belong in `docs/evidence/m0/`.
+
 ## Process boundary
 
-Electron main owns the shell, an opaque non-focusable native video host parented to that shell, a transparent owned overlay window, HWND conversion, mpv lifecycle, private playback input, structured playback log, and typed renderer IPC handlers. mpv receives the video-host HWND and private pipe in process arguments but receives the playlist only through post-connect `loadfile` IPC. Windows child-window parenting supplies clipping; Electron main aligns both native layers and records settled geometry after move, resize, restore, maximise, fullscreen, display-metric, and display-resume events. The overlay is non-resizable, frameless, transparent, absent from the taskbar, and OS-level pointer-click-through outside its intentional control panel. A fixed native helper keeps mpv's child above Electron's own Direct3D child inside the video host without receiving playback input or IPC details. One IPC-heartbeat failure or unexpected process exit can start one controlled replacement attempt for the current generation. Electron GPU-process loss is logged and causes bounded renderer reloads plus geometry and stacking resynchronization.
+Electron main owns the shell, an opaque non-focusable native video host parented to that shell, a transparent owned overlay window, HWND conversion, mpv lifecycle, safeStorage credential service, structured playback log, and typed renderer IPC handlers. A dedicated Electron utility process owns Xtream network calls, normalization, and authenticated URL resolution for this slice; it receives scoped plaintext only for a request and never sends full provider payloads to main. mpv receives the video-host HWND and private pipe in process arguments but receives playback inputs and scoped HTTP options only through post-connect per-file `loadfile` IPC. Windows child-window parenting supplies clipping; Electron main aligns both native layers and records settled geometry after move, resize, restore, maximise, fullscreen, display-metric, and display-resume events. The overlay is non-resizable, frameless, transparent, absent from the taskbar, and OS-level pointer-click-through outside its intentional control panel. A fixed native helper keeps mpv's child above Electron's own Direct3D child inside the video host without receiving playback input or IPC details. One IPC-heartbeat failure or unexpected process exit can start one controlled replacement attempt for the current generation. Electron GPU-process loss is logged and causes bounded renderer reloads plus geometry and stacking resynchronization.
 
-Both renderers remain sandboxed, context-isolated, Node-disabled, and local-code-only. The preload exposes only runtime versions, fixed Previous/Next and 30-change development intents, fullscreen toggle, fixed overlay show/hide/toggle and pointer-region intents, and sanitized placeholder/feedback state. No renderer receives raw `ipcRenderer`, arbitrary mpv commands, pipe names, HWNDs, URLs, or playlist data. Unit tests lock both BrowserWindow security configurations and cover the manifest, handle conversion, generation decisions, overlay state, standard D-pad/accept/back mapping, geometry/lifecycle decisions, fixed commands, JSON-line parsing, input validation, playlist navigation, and redaction logic.
+Both renderers remain sandboxed, context-isolated, Node-disabled, and local-code-only. The preload exposes runtime versions, fixed M0a development controls, fullscreen and overlay intents, sanitized provider view state, internal-channel-ID playback, and a fixed 30-change channel-ID acceptance action. No renderer receives raw `ipcRenderer`, arbitrary mpv commands, pipe names, HWNDs, credentials, authenticated URLs, HTTP options, provider payloads, or playlist data. Unit tests lock both BrowserWindow security configurations and cover the established M0a regressions plus one-time encryption, scoped input validation, minimum-call/authentication behavior, normalization/skipping, stable IDs, TS/HLS resolution, per-file mpv options, renderer isolation, asynchronous newest-request-wins behavior, and structural redaction.

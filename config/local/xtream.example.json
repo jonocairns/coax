@@ -1,0 +1,18 @@
+{
+  "baseUrl": "https://provider.example:443/",
+  "username": "replace-locally",
+  "password": "replace-locally",
+  "outputFormats": ["ts", "m3u8"],
+  "providerRequest": {
+    "userAgent": "Coax development",
+    "referer": "https://provider.example/",
+    "headers": {},
+    "cookie": "replace-or-remove-locally"
+  },
+  "playbackRequest": {
+    "userAgent": "Coax development",
+    "referer": "https://provider.example/",
+    "headers": {},
+    "cookie": "replace-or-remove-locally"
+  }
+}
