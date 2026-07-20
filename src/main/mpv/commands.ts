@@ -6,6 +6,22 @@ export interface MpvCommand {
   request_id: number;
 }
 
+export type MpvDiagnosticProperty =
+  | "current-gpu-context"
+  | "current-vo"
+  | "decoder-frame-drop-count"
+  | "estimated-vf-fps"
+  | "frame-drop-count"
+  | "hwdec-current"
+  | "hwdec-interop"
+  | "osd-height"
+  | "osd-width"
+  | "playback-time"
+  | "track-list"
+  | "vf"
+  | "video-out-params"
+  | "video-params";
+
 export function createMpvPipeName(processId: number): string {
   const nonce = randomBytes(24).toString("hex");
   return `\\\\.\\pipe\\coax-mpv-${processId}-${nonce}`;
@@ -14,6 +30,7 @@ export function createMpvPipeName(processId: number): string {
 export function buildMpvArguments(
   pipeName: string,
   nativeWindowId: string,
+  hardwareArguments: readonly string[] = [],
 ): readonly string[] {
   if (!/^\\\\\.\\pipe\\coax-mpv-\d+-[a-f0-9]{48}$/.test(pipeName)) {
     throw new Error("invalid-mpv-pipe-name");
@@ -32,6 +49,7 @@ export function buildMpvArguments(
     "--input-cursor=no",
     "--osc=no",
     "--osd-level=0",
+    ...hardwareArguments,
     `--wid=${nativeWindowId}`,
     `--input-ipc-server=${pipeName}`,
   ];
@@ -93,11 +111,22 @@ export function createPlaylistStepCommand(
 }
 
 export function createGetPropertyCommand(
-  property: "osd-height" | "osd-width" | "pid" | "playlist-pos",
+  property: MpvDiagnosticProperty | "pid" | "playlist-pos",
   requestId: number,
 ): MpvCommand {
   return {
     command: ["get_property", property],
+    request_id: requestId,
+  };
+}
+
+export function createVideoFilterCommand(
+  operation: "add" | "remove",
+  value: string,
+  requestId: number,
+): MpvCommand {
+  return {
+    command: ["vf", operation, value],
     request_id: requestId,
   };
 }

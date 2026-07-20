@@ -9,9 +9,16 @@ import {
   createMpvPipeName,
   createObservePropertyCommand,
   createPlaylistStepCommand,
+  createVideoFilterCommand,
   serializeMpvCommand,
+  type MpvDiagnosticProperty,
   type MpvCommand,
 } from "./commands";
+import {
+  buildHardwareProfileArguments,
+  type AdapterSelection,
+  type MpvPlaybackProfile,
+} from "./hardware-profile";
 import { JsonLineParser } from "./json-lines";
 import type { MpvPlaybackInput } from "./playback-input";
 import type { VerifiedMpvRuntime } from "./runtime-manifest";
@@ -19,6 +26,15 @@ import {
   StructuredPlaybackLogger,
   type StructuredLogValue,
 } from "./structured-log";
+import {
+  COAX_VSR_FILTER_LABEL,
+  createVsrFilterSpec,
+  decideVideoScaling,
+  isCoaxVsrFilterAttached,
+  isCurrentScalingGeneration,
+  type VideoScaleDecision,
+} from "./video-scaling";
+import { createVideoDiagnosticDetails } from "./video-diagnostics";
 
 const REQUIRED_MPV_EVENTS = new Set([
   "start-file",
@@ -33,18 +49,22 @@ const HEARTBEAT_TIMEOUT_MS = 5_000;
 const REPLACEMENT_DELAY_MS = 250;
 
 type TrackedCommandKind =
-  | "geometry-height"
-  | "geometry-width"
+  | "diagnostic-property"
   | "heartbeat"
   | "loadfile"
   | "observe-paused-for-cache"
   | "playlist-position"
-  | "playlist-step";
+  | "playlist-step"
+  | "scaler-filter";
 
 interface PendingCommand {
+  diagnosticProperty?: MpvDiagnosticProperty;
+  diagnosticRefreshId?: number;
   generation: number;
   instanceId: number;
   kind: TrackedCommandKind;
+  performanceSample?: boolean;
+  scalingRevision?: number;
 }
 
 interface OwnedMpvInstance {
@@ -57,9 +77,29 @@ interface OwnedMpvInstance {
   id: number;
   intentionalStop: boolean;
   pipeName: string;
+  performanceInterval: ReturnType<typeof setInterval> | null;
   processExited: boolean;
   resolveExit: () => void;
   socket: Socket | null;
+}
+
+interface VideoDiagnosticSnapshot {
+  currentGpuContext: string | null;
+  currentVo: string | null;
+  decoder: string | null;
+  filterAttached: boolean;
+  forceScaling: boolean;
+  hwdecCurrent: string | null;
+  hwdecInterop: string | null;
+  id: number;
+  outputHeight: number | null;
+  outputWidth: number | null;
+  pending: number;
+  reason: string;
+  sourceHeight: number | null;
+  sourceWidth: number | null;
+  viewportHeight: number | null;
+  viewportWidth: number | null;
 }
 
 export interface WindowGeometrySample {
@@ -111,6 +151,22 @@ function normalizedCode(value: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function writeMpvCommand(
+  socket: Pick<Socket, "writable" | "write"> | null,
+  command: MpvCommand,
+): boolean {
+  if (!socket?.writable) return false;
+  try {
+    // Writable.write() returning false means backpressure, not rejection. The
+    // command is already buffered and a named-pipe diagnostic burst can cross
+    // the high-water mark during otherwise healthy playback.
+    socket.write(serializeMpvCommand(command));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function openPipe(pipeName: string): Promise<Socket> {
@@ -208,12 +264,25 @@ export class MpvController {
   private shutdownPromise: Promise<void> | null = null;
   private shuttingDown = false;
   private stackingSynchronizationInFlight = false;
+  private diagnosticSequence = 0;
+  private scalingRevision = 0;
+  private filterReconfigDeadline = 0;
+  private appliedScalingSignature: string | null = null;
+  private scalingDecision: VideoScaleDecision = {
+    fallbackScaler: "ewa_lanczossharp",
+    reason: "invalid-dimensions",
+    scaleFactor: null,
+    vsrRequested: false,
+  };
+  private videoDiagnostics: VideoDiagnosticSnapshot | null = null;
 
   constructor(
     private readonly runtime: VerifiedMpvRuntime,
     private readonly logger: StructuredPlaybackLogger,
     private readonly nativeWindowId: string,
     private readonly windowStackingHelperPath: string,
+    private readonly profile: MpvPlaybackProfile,
+    private readonly adapterSelection: AdapterSelection,
     private readonly onPlaybackStatus: (
       event: MpvPlaybackStatusEvent,
     ) => void = () => undefined,
@@ -229,7 +298,11 @@ export class MpvController {
 
   private async spawnAndConnect(reason: "initial" | "replacement") {
     const pipeName = createMpvPipeName(process.pid);
-    const arguments_ = buildMpvArguments(pipeName, this.nativeWindowId);
+    const arguments_ = buildMpvArguments(
+      pipeName,
+      this.nativeWindowId,
+      buildHardwareProfileArguments(this.profile, this.adapterSelection),
+    );
     const child = spawn(this.runtime.executablePath, arguments_, {
       detached: false,
       shell: false,
@@ -250,6 +323,7 @@ export class MpvController {
       id: ++this.instanceSequence,
       intentionalStop: false,
       pipeName,
+      performanceInterval: null,
       processExited: false,
       resolveExit,
       socket: null,
@@ -294,6 +368,7 @@ export class MpvController {
         (id) => createObservePropertyCommand("paused-for-cache", id),
       );
       this.startHeartbeat(instance);
+      this.startPerformanceSampling(instance);
       if (!(await this.synchronizeWindowStacking(instance))) {
         throw new Error("mpv-window-stacking-failed");
       }
@@ -312,6 +387,7 @@ export class MpvController {
     if (instance.processExited) return;
     instance.processExited = true;
     this.stopHeartbeat(instance);
+    this.stopPerformanceSampling(instance);
     instance.socket?.destroy();
     instance.socket = null;
     this.removePendingCommands(instance.id);
@@ -378,7 +454,13 @@ export class MpvController {
   }
 
   private handleIpcMessage(instance: OwnedMpvInstance, message: unknown): void {
-    if (!isRecord(message) || this.active !== instance) return;
+    if (
+      !isRecord(message) ||
+      this.active !== instance ||
+      this.shuttingDown ||
+      instance.processExited
+    )
+      return;
     if (
       message.event === "property-change" &&
       message.name === "paused-for-cache" &&
@@ -413,6 +495,24 @@ export class MpvController {
         for (const resolve of instance.endFileWaiters.splice(0)) resolve();
       }
       this.logger.write("mpv-event", eventGeneration, details);
+      if (message.event === "start-file") {
+        this.appliedScalingSignature = null;
+        this.scalingDecision = {
+          fallbackScaler: this.profile.fallbackScaler,
+          reason: "invalid-dimensions",
+          scaleFactor: null,
+          vsrRequested: false,
+        };
+        const scalingRevision = ++this.scalingRevision;
+        this.sendTracked(
+          instance,
+          "scaler-filter",
+          this.generation,
+          (id) =>
+            createVideoFilterCommand("remove", `@${COAX_VSR_FILTER_LABEL}`, id),
+          { scalingRevision },
+        );
+      }
       if (message.event === "playback-restart") {
         this.onPlaybackStatus({
           generation: eventGeneration,
@@ -425,6 +525,17 @@ export class MpvController {
         message.event === "playback-restart"
       ) {
         this.requestWindowStackingSynchronization(instance);
+      }
+      if (message.event === "video-reconfig") {
+        this.refreshVideoDiagnostics(
+          instance,
+          performance.now() <= this.filterReconfigDeadline
+            ? "filter-video-reconfig"
+            : "video-reconfig",
+          false,
+        );
+      } else if (message.event === "playback-restart") {
+        this.refreshVideoDiagnostics(instance, "playback-restart", false);
       }
       return;
     }
@@ -449,6 +560,31 @@ export class MpvController {
         instance.heartbeatRequestId = null;
         if (instance.heartbeatTimeout) clearTimeout(instance.heartbeatTimeout);
         instance.heartbeatTimeout = null;
+      }
+      return;
+    }
+
+    if (pending.kind === "diagnostic-property") {
+      this.handleDiagnosticPropertyResult(pending, message, result);
+      return;
+    }
+
+    if (pending.kind === "scaler-filter") {
+      const currentGeneration = isCurrentScalingGeneration(
+        this.generation,
+        pending.generation,
+      );
+      this.logger.write("mpv-scaler-command-result", pending.generation, {
+        accepted:
+          currentGeneration && pending.scalingRevision === this.scalingRevision,
+        result,
+        scalingRevision: pending.scalingRevision ?? null,
+      });
+      if (
+        currentGeneration &&
+        pending.scalingRevision === this.scalingRevision
+      ) {
+        this.refreshVideoDiagnostics(instance, "scaler-command-result", false);
       }
       return;
     }
@@ -498,17 +634,260 @@ export class MpvController {
     }
   }
 
+  private handleDiagnosticPropertyResult(
+    pending: PendingCommand,
+    message: Record<string, unknown>,
+    result: string,
+  ): void {
+    const property = pending.diagnosticProperty;
+    if (!property) return;
+    if (pending.performanceSample) {
+      const value = message.data;
+      this.logger.write("mpv-performance-sample", pending.generation, {
+        property,
+        result,
+        value:
+          typeof value === "string" ||
+          typeof value === "number" ||
+          typeof value === "boolean" ||
+          value === null
+            ? value
+            : null,
+      });
+      return;
+    }
+    if (!isCurrentScalingGeneration(this.generation, pending.generation)) {
+      return;
+    }
+
+    const snapshot = this.videoDiagnostics;
+    if (
+      !snapshot ||
+      pending.diagnosticRefreshId !== snapshot.id ||
+      snapshot.pending <= 0
+    ) {
+      return;
+    }
+    snapshot.pending -= 1;
+    if (result === "success") {
+      this.applyDiagnosticProperty(snapshot, property, message.data);
+    }
+    const instance = this.active;
+    if (instance) this.maybeApplyScaling(instance, snapshot);
+    if (snapshot.pending === 0) this.logVideoDiagnostics(snapshot);
+  }
+
+  private applyDiagnosticProperty(
+    snapshot: VideoDiagnosticSnapshot,
+    property: MpvDiagnosticProperty,
+    value: unknown,
+  ): void {
+    const size = (
+      candidate: unknown,
+    ): { height: number; width: number } | null => {
+      if (!isRecord(candidate)) return null;
+      const width = candidate.w;
+      const height = candidate.h;
+      return typeof width === "number" &&
+        Number.isSafeInteger(width) &&
+        width > 0 &&
+        typeof height === "number" &&
+        Number.isSafeInteger(height) &&
+        height > 0
+        ? { height, width }
+        : null;
+    };
+    if (property === "video-params") {
+      const source = size(value);
+      snapshot.sourceWidth = source?.width ?? null;
+      snapshot.sourceHeight = source?.height ?? null;
+    } else if (property === "video-out-params") {
+      const output = size(value);
+      snapshot.outputWidth = output?.width ?? null;
+      snapshot.outputHeight = output?.height ?? null;
+    } else if (property === "osd-width" && typeof value === "number") {
+      snapshot.viewportWidth = Number.isSafeInteger(value) ? value : null;
+    } else if (property === "osd-height" && typeof value === "number") {
+      snapshot.viewportHeight = Number.isSafeInteger(value) ? value : null;
+    } else if (property === "hwdec-current" && typeof value === "string") {
+      snapshot.hwdecCurrent = normalizedCode(value);
+    } else if (property === "hwdec-interop" && typeof value === "string") {
+      snapshot.hwdecInterop = normalizedCode(value);
+    } else if (property === "current-vo" && typeof value === "string") {
+      snapshot.currentVo = normalizedCode(value);
+    } else if (
+      property === "current-gpu-context" &&
+      typeof value === "string"
+    ) {
+      snapshot.currentGpuContext = normalizedCode(value);
+    } else if (property === "vf") {
+      snapshot.filterAttached = isCoaxVsrFilterAttached(value);
+    } else if (property === "track-list" && Array.isArray(value)) {
+      const selectedVideo = value.find(
+        (track) =>
+          isRecord(track) && track.type === "video" && track.selected === true,
+      );
+      if (
+        isRecord(selectedVideo) &&
+        typeof selectedVideo.decoder === "string"
+      ) {
+        snapshot.decoder = normalizedCode(selectedVideo.decoder);
+      }
+    }
+  }
+
+  private refreshVideoDiagnostics(
+    instance: OwnedMpvInstance,
+    reason: string,
+    forceScaling: boolean,
+  ): void {
+    if (
+      this.active !== instance ||
+      this.shuttingDown ||
+      instance.processExited ||
+      !instance.socket?.writable
+    ) {
+      return;
+    }
+    const properties = [
+      "video-params",
+      "video-out-params",
+      "osd-width",
+      "osd-height",
+      "hwdec-current",
+      "hwdec-interop",
+      "current-vo",
+      "current-gpu-context",
+      "track-list",
+      "vf",
+    ] as const satisfies readonly MpvDiagnosticProperty[];
+    const snapshot: VideoDiagnosticSnapshot = {
+      currentGpuContext: null,
+      currentVo: null,
+      decoder: null,
+      filterAttached: false,
+      forceScaling,
+      hwdecCurrent: null,
+      hwdecInterop: null,
+      id: ++this.diagnosticSequence,
+      outputHeight: null,
+      outputWidth: null,
+      pending: properties.length,
+      reason: normalizedCode(reason),
+      sourceHeight: null,
+      sourceWidth: null,
+      viewportHeight: null,
+      viewportWidth: null,
+    };
+    this.videoDiagnostics = snapshot;
+    for (const property of properties) {
+      this.sendTracked(
+        instance,
+        "diagnostic-property",
+        this.generation,
+        (id) => createGetPropertyCommand(property, id),
+        {
+          diagnosticProperty: property,
+          diagnosticRefreshId: snapshot.id,
+        },
+      );
+    }
+  }
+
+  private maybeApplyScaling(
+    instance: OwnedMpvInstance,
+    snapshot: VideoDiagnosticSnapshot,
+  ): void {
+    if (
+      snapshot.sourceWidth === null ||
+      snapshot.sourceHeight === null ||
+      snapshot.viewportWidth === null ||
+      snapshot.viewportHeight === null
+    ) {
+      return;
+    }
+    const decision = decideVideoScaling(
+      { height: snapshot.sourceHeight, width: snapshot.sourceWidth },
+      { height: snapshot.viewportHeight, width: snapshot.viewportWidth },
+      this.profile.requestVsr,
+    );
+    const signature = JSON.stringify({
+      decision,
+      sourceHeight: snapshot.sourceHeight,
+      sourceWidth: snapshot.sourceWidth,
+      viewportHeight: snapshot.viewportHeight,
+      viewportWidth: snapshot.viewportWidth,
+    });
+    if (!snapshot.forceScaling && signature === this.appliedScalingSignature) {
+      this.scalingDecision = decision;
+      return;
+    }
+    snapshot.forceScaling = false;
+    this.appliedScalingSignature = signature;
+    this.scalingDecision = decision;
+    const scalingRevision = ++this.scalingRevision;
+    this.filterReconfigDeadline = performance.now() + 1_500;
+    this.sendTracked(
+      instance,
+      "scaler-filter",
+      this.generation,
+      (id) =>
+        decision.vsrRequested && decision.scaleFactor !== null
+          ? createVideoFilterCommand(
+              "add",
+              createVsrFilterSpec(decision.scaleFactor),
+              id,
+            )
+          : createVideoFilterCommand("remove", `@${COAX_VSR_FILTER_LABEL}`, id),
+      { scalingRevision },
+    );
+    this.logger.write("mpv-scaler-requested", this.generation, {
+      fallbackScaler: decision.fallbackScaler,
+      reason: decision.reason,
+      scaleFactor: decision.scaleFactor,
+      scalingRevision,
+      sourceHeight: snapshot.sourceHeight,
+      sourceWidth: snapshot.sourceWidth,
+      viewportHeight: snapshot.viewportHeight,
+      viewportWidth: snapshot.viewportWidth,
+      vsrRequested: decision.vsrRequested,
+    });
+  }
+
+  private logVideoDiagnostics(snapshot: VideoDiagnosticSnapshot): void {
+    this.logger.write(
+      "mpv-video-diagnostics",
+      this.generation,
+      createVideoDiagnosticDetails(
+        snapshot,
+        this.profile,
+        this.adapterSelection,
+        this.scalingDecision,
+      ),
+    );
+  }
+
   private sendTracked(
     instance: OwnedMpvInstance,
     kind: TrackedCommandKind,
     generation: number,
     create: (requestId: number) => MpvCommand,
+    metadata: Partial<
+      Pick<
+        PendingCommand,
+        | "diagnosticProperty"
+        | "diagnosticRefreshId"
+        | "performanceSample"
+        | "scalingRevision"
+      >
+    > = {},
   ): number {
     const requestId = ++this.requestSequence;
     this.pendingCommands.set(requestId, {
       generation,
       instanceId: instance.id,
       kind,
+      ...metadata,
     });
     if (!this.send(instance, create(requestId))) {
       this.pendingCommands.delete(requestId);
@@ -525,8 +904,7 @@ export class MpvController {
     ) {
       return false;
     }
-    instance.socket.write(serializeMpvCommand(command));
-    return true;
+    return writeMpvCommand(instance.socket, command);
   }
 
   private sendLoad(instance: OwnedMpvInstance, input: MpvPlaybackInput): void {
@@ -587,12 +965,7 @@ export class MpvController {
     });
     const instance = this.active;
     if (!instance?.socket?.writable || instance.processExited) return;
-    this.sendTracked(instance, "geometry-width", this.generation, (id) =>
-      createGetPropertyCommand("osd-width", id),
-    );
-    this.sendTracked(instance, "geometry-height", this.generation, (id) =>
-      createGetPropertyCommand("osd-height", id),
-    );
+    this.refreshVideoDiagnostics(instance, "viewport-change", false);
     this.requestWindowStackingSynchronization(instance);
   }
 
@@ -708,6 +1081,46 @@ export class MpvController {
     instance.heartbeatInterval = null;
     instance.heartbeatTimeout = null;
     instance.heartbeatRequestId = null;
+  }
+
+  private startPerformanceSampling(instance: OwnedMpvInstance): void {
+    const sample = (): void => {
+      if (
+        this.active !== instance ||
+        this.shuttingDown ||
+        instance.processExited ||
+        !instance.socket?.writable
+      ) {
+        return;
+      }
+      const properties = [
+        "frame-drop-count",
+        "decoder-frame-drop-count",
+        "estimated-vf-fps",
+        "playback-time",
+      ] as const satisfies readonly MpvDiagnosticProperty[];
+      for (const property of properties) {
+        try {
+          this.sendTracked(
+            instance,
+            "diagnostic-property",
+            this.generation,
+            (id) => createGetPropertyCommand(property, id),
+            { diagnosticProperty: property, performanceSample: true },
+          );
+        } catch {
+          return;
+        }
+      }
+    };
+    sample();
+    instance.performanceInterval = setInterval(sample, 5_000);
+  }
+
+  private stopPerformanceSampling(instance: OwnedMpvInstance): void {
+    if (instance.performanceInterval)
+      clearInterval(instance.performanceInterval);
+    instance.performanceInterval = null;
   }
 
   private async replaceUnresponsiveInstance(
@@ -827,6 +1240,7 @@ export class MpvController {
   ): Promise<void> {
     const processId = instance.child.pid;
     this.stopHeartbeat(instance);
+    this.stopPerformanceSampling(instance);
     if (!processId || instance.processExited) return;
 
     if (graceful && instance.socket?.writable) {

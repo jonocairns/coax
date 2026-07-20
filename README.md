@@ -1,6 +1,6 @@
 # Coax
 
-Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0b Slice 5: the Xtream channel-to-video vertical slice**: the secure Electron/React foundation, a pinned Windows x64 mpv child embedded into the Electron window and controlled through JSON IPC, the selected Path A interactive overlay, and a minimal safeStorage-backed Xtream live-category/live-channel path. Path A passed every row available on the current native hardware, but the inherited controller and multi-monitor/DPI rows remain open. GPU tuning, EPG/SQLite, the full recovery supervisor, and production credential UX have not begun.
+Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0b Slice 6: hardware decode, adapter selection, and viewport-aware 720p→4K scaling** on top of the secure Electron/React foundation, pinned Windows x64 mpv child, selected Path A overlay, and Slice 5 safeStorage-backed Xtream path. Native evidence selects D3D11VA on the target RTX 5080 as the safe default. The NVIDIA D3D11VPP request is observable as requested and attached, but no reliable confirmation signal was available, so Coax does not label VSR active. The NVDEC hardware row, inherited controller and multi-monitor/DPI rows, and Slice 5 native invalid-auth row remain open. Sports/deinterlacing, EPG/SQLite, the full recovery supervisor, and production credential UX have not begun.
 
 ## Versions
 
@@ -195,6 +195,38 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice5-acc
 ```
 
 With no Xtream input, the harness writes an ignored `unobserved` result and leaves provider/TS/HLS rows open. With suitable input, it waits for sanitized normalized/skipped counts, guides visible-video/audible-audio checks for each available transport, measures channel-intent-to-`playback-restart`, runs 30 asynchronous channel-ID requests, requires the newest generation to become current, scans actual mpv arguments and persisted structured logs for private values, and requires clean application shutdown. Raw output remains under ignored `artifacts/m0/<run-id>/`; only reviewed sanitized summaries belong in `docs/evidence/m0/`.
+
+## Native Slice 6 acceptance
+
+Create the controlled fixtures directly under the protected native mirror's ignored artifact tree from WSL/Nix:
+
+```bash
+nix develop -c bash -lc './scripts/create-slice6-fixtures.sh'
+```
+
+At the start of a result series, record the Windows build, NVIDIA GPU and driver, display model, 4K resolution/refresh mode, audio output, Electron/mpv/FFmpeg revisions, and source dirty state. A configuration change starts a new series. Run the modes from native Windows PowerShell, substituting the actual non-unique configuration values:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice6-acceptance.ps1 `
+  -SkipInstall -Mode Compare -DisplayModel '<display model>' -AudioOutput '<audio output>' `
+  -SourceRevision '<git revision>' -SourceDirty $true
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice6-acceptance.ps1 `
+  -SkipInstall -Mode Resolution -DisplayModel '<display model>' -AudioOutput '<audio output>' `
+  -SourceRevision '<git revision>' -SourceDirty $true
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice6-acceptance.ps1 `
+  -SkipInstall -Mode Fallback -DisplayModel '<display model>' -AudioOutput '<audio output>' `
+  -SourceRevision '<git revision>' -SourceDirty $true
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice6-acceptance.ps1 `
+  -SkipInstall -Mode Soak -SoakProfile d3d11va -DisplayModel '<display model>' `
+  -AudioOutput '<audio output>' -SourceRevision '<git revision>' -SourceDirty $true
+```
+
+The harness builds once, launches the built pinned Electron application without a development server, records sanitized GPU/adapter/profile/decoder/render/size/scaler states, samples mpv resources and dropped-frame properties, and cleans up the owned process tree. `Compare` uses the same clean local 720p50 fixture for D3D11VA, NVDEC, and software. `Soak` includes a 30-second warm-up followed by the required ten-minute measurement. `Resolution` changes both source and viewport sizes. `Fallback` uses a locally generated H.264 format unsupported by the hardware decoder and requires continuing software playback. Raw fixture media, logs, adapter output, and result JSON remain only under ignored native `artifacts/m0/`; do not copy them back to WSL or commit them.
+
+Diagnostics deliberately separate `vsrRequested`, `vsrFilterAttached`, and `vsrConfirmed`. Successful D3D11VPP attachment or NVIDIA presence is not confirmation that RTX VSR processed the video. Unless a reliable external confirmation signal is observed, `vsrConfirmed` remains false and `vsrConfirmationSignal` remains `unavailable`.
 
 ## Process boundary
 

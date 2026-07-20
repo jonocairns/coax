@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface LocalPlaybackInput {
@@ -17,7 +17,29 @@ export interface MpvPlaybackInput {
   channelId?: string;
   http?: MpvHttpOptions;
   streamUrl: string;
-  transport: "hls" | "http" | "https" | "mpeg-ts";
+  transport: "hls" | "http" | "https" | "mpeg-ts" | "synthetic";
+}
+
+export async function readSlice6SyntheticInput(
+  applicationRoot: string,
+  fixtureName: string | undefined,
+): Promise<MpvPlaybackInput | null> {
+  if (!fixtureName) return null;
+  if (!/^[a-z0-9][a-z0-9._-]{0,95}\.(?:mkv|mp4|mpegts)$/i.test(fixtureName)) {
+    throw new Error("invalid-slice6-fixture-name");
+  }
+  const path = join(
+    applicationRoot,
+    "artifacts",
+    "m0",
+    "fixtures",
+    fixtureName,
+  );
+  const metadata = await stat(path);
+  if (!metadata.isFile() || metadata.size === 0) {
+    throw new Error("invalid-slice6-fixture-file");
+  }
+  return { streamUrl: path, transport: "synthetic" };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

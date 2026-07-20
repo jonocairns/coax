@@ -31,7 +31,16 @@ import {
   type OverlayStateEvent,
 } from "../shared/overlay";
 import { MpvController, type MpvPlaybackStatusEvent } from "./mpv/controller";
-import { readLocalPlaybackInput } from "./mpv/playback-input";
+import { extractElectronGpuDiagnostics } from "./electron-gpu";
+import { enumerateD3d11Adapters } from "./mpv/hardware-probe";
+import {
+  resolveMpvPlaybackProfile,
+  selectD3d11Adapter,
+} from "./mpv/hardware-profile";
+import {
+  readLocalPlaybackInput,
+  readSlice6SyntheticInput,
+} from "./mpv/playback-input";
 import { loadVerifiedMpvRuntime } from "./mpv/runtime-manifest";
 import { StructuredPlaybackLogger } from "./mpv/structured-log";
 import { nativeWindowHandleToWid } from "./native-window";
@@ -48,6 +57,10 @@ import {
   createMainWindowOptions,
   createOverlayWindowOptions,
 } from "./window-options";
+
+if (process.platform === "win32") {
+  app.commandLine.appendSwitch("force_high_performance_gpu");
+}
 
 let mainWindow: BrowserWindow | null = null;
 let videoWindow: BaseWindow | null = null;
@@ -70,6 +83,7 @@ function runtimeVersions(): RuntimeVersions {
     chrome: process.versions.chrome,
     electron: process.versions.electron,
     node: process.versions.node,
+    slice6Acceptance: process.env.COAX_SLICE6_ACCEPTANCE === "1",
   };
 }
 
@@ -766,6 +780,36 @@ function createOverlayWindow(parent: BrowserWindow): BrowserWindow {
   return window;
 }
 
+function configureSlice6Acceptance(window: BrowserWindow): void {
+  if (process.env.COAX_SLICE6_ACCEPTANCE !== "1") return;
+  if (process.env.COAX_SLICE6_FULLSCREEN === "1") {
+    window.setFullScreen(true);
+  }
+  if (process.env.COAX_SLICE6_VIEWPORT_CYCLE === "1") {
+    setTimeout(() => {
+      if (window.isDestroyed()) return;
+      window.setFullScreen(false);
+      window.setSize(1280, 720);
+      window.center();
+    }, 5_000);
+    setTimeout(() => {
+      if (window.isDestroyed()) return;
+      window.setSize(960, 540);
+      window.center();
+    }, 10_000);
+    setTimeout(() => {
+      if (!window.isDestroyed()) window.setFullScreen(true);
+    }, 15_000);
+  }
+  const rawAutoExit = process.env.COAX_SLICE6_AUTO_EXIT_SECONDS;
+  if (rawAutoExit && /^\d{1,4}$/.test(rawAutoExit)) {
+    const seconds = Number(rawAutoExit);
+    if (seconds >= 5 && seconds <= 900) {
+      setTimeout(() => app.quit(), seconds * 1_000);
+    }
+  }
+}
+
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow(
     createMainWindowOptions(join(__dirname, "../preload/index.js")),
@@ -778,6 +822,7 @@ function createMainWindow(): BrowserWindow {
   secureLocalRenderer(window);
   window.once("ready-to-show", () => {
     window.show();
+    configureSlice6Acceptance(window);
     alignNativeLayers(window);
 
     if (process.env.COAX_SMOKE_TEST === "1") {
@@ -817,7 +862,7 @@ function handleMpvPlaybackStatus(event: MpvPlaybackStatusEvent): void {
   showOverlay(false, `recovery-${event.reason}`);
 }
 
-async function startSlice5Playback(
+async function startM0Playback(
   window: BrowserWindow,
   nativeVideoHost: BaseWindow,
 ): Promise<void> {
@@ -827,31 +872,54 @@ async function startSlice5Playback(
 
   const applicationRoot = app.getAppPath();
   playbackLogger = new StructuredPlaybackLogger(applicationRoot);
+  const slice6Acceptance = process.env.COAX_SLICE6_ACCEPTANCE === "1";
+  let syntheticInput = null;
+  if (slice6Acceptance) {
+    try {
+      syntheticInput = await readSlice6SyntheticInput(
+        applicationRoot,
+        process.env.COAX_SLICE6_FIXTURE_NAME,
+      );
+      playbackLogger.write("slice6-synthetic-input", 0, {
+        configured: syntheticInput !== null,
+      });
+    } catch {
+      playbackLogger.write("slice6-synthetic-input", 0, {
+        configured: false,
+        reason: "invalid-synthetic-input",
+      });
+      throw new Error("invalid-slice6-synthetic-input");
+    }
+  }
   const credentials = new XtreamCredentialService(
     safeStorage,
     applicationRoot,
     app.getPath("userData"),
   );
   let credentialStatus: "available" | "missing" = "missing";
-  try {
-    const result = await credentials.initialize();
-    credentialStatus = result.status;
-    playbackLogger.write("provider-credentials-initialized", 0, {
-      imported: result.imported,
-      status: result.status,
-    });
-  } catch (error) {
-    const failure = providerFailure(error);
-    setProviderState({ error: failure, phase: "error" });
-    playbackLogger.write("provider-credentials-failed", 0, {
-      failureKind: failure.kind,
-      reason: failure.code,
-    });
+  if (!slice6Acceptance) {
+    try {
+      const result = await credentials.initialize();
+      credentialStatus = result.status;
+      playbackLogger.write("provider-credentials-initialized", 0, {
+        imported: result.imported,
+        status: result.status,
+      });
+    } catch (error) {
+      const failure = providerFailure(error);
+      setProviderState({ error: failure, phase: "error" });
+      playbackLogger.write("provider-credentials-failed", 0, {
+        failureKind: failure.kind,
+        reason: failure.code,
+      });
+    }
+  } else {
+    setProviderState({ phase: "not-configured" });
   }
 
-  let input = null;
+  let input = syntheticInput;
   try {
-    if (credentialStatus === "missing") {
+    if (!slice6Acceptance && credentialStatus === "missing") {
       input = await readLocalPlaybackInput(applicationRoot);
     }
   } catch {
@@ -859,7 +927,7 @@ async function startSlice5Playback(
       reason: "invalid-local-input",
     });
   }
-  if (credentialStatus === "missing") {
+  if (!slice6Acceptance && credentialStatus === "missing") {
     if (!input) {
       playbackLogger.write("playback-input-missing", 0, {
         reason: "local-input-not-configured",
@@ -884,17 +952,64 @@ async function startSlice5Playback(
       mpvCommit: runtime.manifest.source.mpvCommit,
       ffmpegCommit: runtime.manifest.source.ffmpegCommit,
     });
+    try {
+      const gpu = extractElectronGpuDiagnostics(
+        await app.getGPUInfo("complete"),
+      );
+      playbackLogger.write("electron-gpu-diagnostics", 0, {
+        activeGpu: gpu.activeGpu,
+        driverVersion: gpu.driverVersion,
+        hardwareAccelerationEnabled: app.isHardwareAccelerationEnabled(),
+        videoDecodeFeature:
+          app.getGPUFeatureStatus().video_decode ?? "unavailable",
+      });
+    } catch {
+      playbackLogger.write("electron-gpu-diagnostics", 0, {
+        activeGpu: "unavailable",
+        driverVersion: "unavailable",
+        hardwareAccelerationEnabled: app.isHardwareAccelerationEnabled(),
+        videoDecodeFeature: "unavailable",
+      });
+    }
+    const adapters = await enumerateD3d11Adapters(runtime.executablePath);
+    const adapterSelection = selectD3d11Adapter(adapters);
+    for (const adapter of adapters) {
+      playbackLogger.write("mpv-d3d11-adapter-enumerated", 0, {
+        adapterDescription: adapter.description,
+        adapterIndex: adapter.index,
+        defaultAdapter: adapter.index === 0,
+        vendorId: adapter.vendorId,
+      });
+    }
+    const profile = resolveMpvPlaybackProfile(
+      process.env.COAX_M0_PLAYBACK_PROFILE,
+    );
+    playbackLogger.write("mpv-profile-selected", 0, {
+      adapter: adapterSelection.adapter.description,
+      adapterDefault: adapterSelection.defaultAdapter.description,
+      adapterExplicit: adapterSelection.explicit,
+      adapterSelectionReason: adapterSelection.reason,
+      fallbackScaler: profile.fallbackScaler,
+      gpuApi: "d3d11",
+      gpuContext: "d3d11",
+      hwdecRequested: profile.hwdec,
+      profile: profile.name,
+      renderVo: "gpu-next",
+      vsrPolicyEnabled: profile.requestVsr,
+    });
     mpvController = new MpvController(
       runtime,
       playbackLogger,
       nativeWindowId,
       join(applicationRoot, "scripts", "raise-mpv-child-window.ps1"),
+      profile,
+      adapterSelection,
       handleMpvPlaybackStatus,
     );
     await mpvController.start(input ?? undefined);
     videoPlaybackReady = input !== null;
     if (videoPlaybackReady) scheduleGeometrySynchronization(window, "ready");
-    if (credentialStatus === "available") {
+    if (!slice6Acceptance && credentialStatus === "available") {
       providerClient = new XtreamUtilityClient(
         join(__dirname, "provider-worker.js"),
       );
@@ -955,7 +1070,7 @@ void app.whenReady().then(() => {
   const window = createMainWindow();
   const nativeVideoHost = videoWindow;
   if (!nativeVideoHost) throw new Error("native-video-host-unavailable");
-  playbackStartup = startSlice5Playback(window, nativeVideoHost);
+  playbackStartup = startM0Playback(window, nativeVideoHost);
 
   powerMonitor.on("resume", () => {
     const current = mainWindow;

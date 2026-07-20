@@ -26,6 +26,20 @@ export function App(): React.JSX.Element {
 
   useControllerNavigation(handleControllerAction);
 
+  if (versions?.slice6Acceptance) {
+    return (
+      <main className="shell-surface">
+        <p className="eyebrow">M0b · Slice 6 · controlled native run</p>
+        <h1>Hardware playback benchmark</h1>
+        <p>
+          The synthetic fixture and fixed profile are controlled by the native
+          acceptance harness. Development playback controls are disabled for
+          this run.
+        </p>
+      </main>
+    );
+  }
+
   async function cycleChannel(direction: "next" | "previous"): Promise<void> {
     try {
       const result = await window.coax.cycleTestChannel(direction);

@@ -26,6 +26,7 @@ export interface RuntimeVersions {
   chrome: string;
   electron: string;
   node: string;
+  slice6Acceptance: boolean;
 }
 
 export interface PlaylistIntentResult {

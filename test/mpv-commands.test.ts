@@ -6,6 +6,7 @@ import {
   createMpvPipeName,
   createObservePropertyCommand,
   createPlaylistStepCommand,
+  createVideoFilterCommand,
   serializeMpvCommand,
 } from "../src/main/mpv/commands";
 
@@ -91,6 +92,23 @@ describe("mpv command construction", () => {
     expect(createPlaylistStepCommand("previous", 102)).toEqual({
       command: ["playlist-prev", "force"],
       request_id: 102,
+    });
+  });
+
+  it("constructs only labelled Slice 6 video-filter mutations", () => {
+    expect(
+      createVideoFilterCommand(
+        "add",
+        "@coax-vsr:d3d11vpp=scale=3:scaling-mode=nvidia",
+        104,
+      ),
+    ).toEqual({
+      command: ["vf", "add", "@coax-vsr:d3d11vpp=scale=3:scaling-mode=nvidia"],
+      request_id: 104,
+    });
+    expect(createVideoFilterCommand("remove", "@coax-vsr", 105)).toEqual({
+      command: ["vf", "remove", "@coax-vsr"],
+      request_id: 105,
     });
   });
 });
