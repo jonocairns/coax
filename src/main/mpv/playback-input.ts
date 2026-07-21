@@ -21,6 +21,76 @@ export interface MpvPlaybackInput {
   transport: "hls" | "http" | "https" | "mpeg-ts" | "synthetic";
 }
 
+export type Slice8FixtureId = "clean-aes128-hls" | "clean-hls" | "clean-ts";
+
+const SLICE8_FIXTURES: Readonly<
+  Record<Slice8FixtureId, { path: string; transport: "hls" | "mpeg-ts" }>
+> = {
+  "clean-aes128-hls": {
+    path: "/v1/stream/hls-aes/index.m3u8",
+    transport: "hls",
+  },
+  "clean-hls": { path: "/v1/stream/hls/index.m3u8", transport: "hls" },
+  "clean-ts": { path: "/v1/stream/ts", transport: "mpeg-ts" },
+};
+
+function isPrivateHarnessHost(hostname: string): boolean {
+  if (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]"
+  ) {
+    return true;
+  }
+  const octets = hostname.split(".").map(Number);
+  if (
+    octets.length !== 4 ||
+    octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
+    return false;
+  }
+  const [first = -1, second = -1] = octets;
+  return (
+    first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168) ||
+    first === 127
+  );
+}
+
+export function parseSlice8HarnessInput(
+  playerUrl: string | undefined,
+  fixtureId: string | undefined,
+): MpvPlaybackInput | null {
+  if (!playerUrl && !fixtureId) return null;
+  if (!playerUrl || !fixtureId || !(fixtureId in SLICE8_FIXTURES)) {
+    throw new Error("invalid-slice8-harness-input");
+  }
+  const definition = SLICE8_FIXTURES[fixtureId as Slice8FixtureId];
+  let url: URL;
+  try {
+    url = new URL(playerUrl);
+  } catch {
+    throw new Error("invalid-slice8-harness-url");
+  }
+  if (
+    url.protocol !== "http:" ||
+    !isPrivateHarnessHost(url.hostname) ||
+    url.pathname !== definition.path ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error("invalid-slice8-harness-url");
+  }
+  return {
+    channelId: `harness:${fixtureId}`,
+    streamUrl: url.toString(),
+    transport: definition.transport,
+  };
+}
+
 export async function readSlice6SyntheticInput(
   applicationRoot: string,
   fixtureName: string | undefined,

@@ -6,13 +6,21 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: [".cache/", "coverage/", "dist/", "node_modules/", "out/"],
+    ignores: [
+      ".cache/",
+      "artifacts/",
+      "coverage/",
+      "dist/",
+      "node_modules/",
+      "out/",
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.strict,
   {
     files: [
       "*.config.{js,ts}",
+      "harness/slice8/*.mjs",
       "src/main/**/*.ts",
       "src/preload/**/*.ts",
       "src/shared/**/*.ts",

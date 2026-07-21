@@ -1,6 +1,6 @@
 # Coax
 
-Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0b Slice 7: sports motion baseline** on top of the secure Electron/React foundation, pinned Windows x64 mpv child, selected Path A overlay, Slice 5 safeStorage-backed Xtream path, and Slice 6 D3D11VA/viewport-aware scaling baseline. The selected target path uses D3D11VPP adaptive deinterlacing with automatic or explicit field parity, one atomically replaced owned video-filter graph, a software fallback, and cadence/drop/repeat/A/V-drift/reconfiguration diagnostics. Controlled native fixtures reached the expected 50 or 59.94 fps cadence without post-warm-up drop/repeat growth; visual motion/combing judgments and the interrupted 30-minute row remain open. Coax still does not label VSR active without a demonstrated confirmation signal. The NVDEC hardware row, inherited controller and multi-monitor/DPI rows, and Slice 5 native invalid-auth row also remain open. Slice 8, EPG/SQLite, the broader recovery supervisor, and production credential UX have not begun.
+Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0b Slice 8: clean-stream harness and diagnostics baseline** on top of the secure Electron/React foundation, pinned Windows x64 mpv child, selected Path A overlay, safeStorage-backed Xtream path, D3D11VA/viewport-aware scaling baseline, and sports-motion graph. A Nix-hosted generated proxy exposes stable continuous TS, HLS, and standard AES-128 HLS paths to native Windows; results use a versioned schema with no fault schedule yet. Playback logs now have bounded rotation/retention, explicit baseline-stage timestamps, and structural redaction coverage. Automated native playback/timing, AES confidentiality, reconnect-option consumption, and the actual named-pipe DACL were observed; human visible-video/audible-audio confirmation remains open. Slice 7 visual and 30-minute rows, NVDEC under D3D11, actual VSR confirmation, inherited controller and multi-monitor/DPI rows, and Slice 5 native invalid-auth also remain open. EPG/SQLite, the M1 recovery supervisor/fault schedules, and production credential UX have not begun.
 
 ## Versions
 
@@ -256,6 +256,29 @@ $common = @{
 ```
 
 The harness uses local 720p50/59.94, 576i50, 1080i50, TFF/BFF, deliberately wrong-metadata, and long-run fixtures. It records actual decode/render/deinterlace state, field metadata and override, atomic graph reconfiguration, duplicate owned filters, output cadence, dropped/delayed/repeated frames, A/V drift, recovery, resources, and clean shutdown. `-SkipVisualChecks` is useful for automated diagnostics, but it explicitly leaves smooth motion, combing, judder, wrong-order diagnosis, and recovered field order unobserved; filter attachment or a 50 fps property is not a visual pass. Raw media, console output, logs, resource samples, and result JSON remain only under ignored native `artifacts/m0/<run-id>/` paths.
+
+## Native Slice 8 acceptance
+
+Start the clean generator/proxy from Nix, writing its generated media, AES key, and raw proxy output directly into the ignored native artifact tree:
+
+```bash
+nix develop -c bash -lc './scripts/start-slice8-harness.sh \
+  --artifact-dir /mnt/c/src/coax-win/artifacts/m0/slice8-proxy \
+  --bind 0.0.0.0 --port 48180'
+```
+
+The observed Windows 11/WSL configuration reached this service through `127.0.0.1`. If loopback forwarding is unavailable on a later machine, pass an RFC1918 WSL address as `-ProxyHost`; the player rejects public, authenticated, queried, or non-contract harness URLs. Keep the proxy running, then use native Windows PowerShell in `C:\src\coax-win`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice8-acceptance.ps1 `
+  -SkipInstall -ProxyHost 127.0.0.1 -ProxyPort 48180 `
+  -DisplayModel '<display model>' -AudioOutput '<audio output>' `
+  -SourceRevision '<git revision>' -SourceDirty $true
+```
+
+The stable player paths are `/v1/stream/ts`, `/v1/stream/hls/index.m3u8`, and `/v1/stream/hls-aes/index.m3u8`. [`harness/slice8/fixtures.json`](harness/slice8/fixtures.json) and [`harness/slice8/result.schema.json`](harness/slice8/result.schema.json) version the clean contract; `faultSchedule` is deliberately `null` so M1 can add schedules without changing the player-facing paths or result shape. The app records start, request, first-frame, confirmed-playback, shutdown-start, and shutdown-complete stages. App logs retain at most four 2 MiB JSONL files per run; proxy logs retain at most four 1 MiB files. Both sanitize before persistence.
+
+The harness probes the pinned binary rather than enabling reconnect settings in the player. It reports the compiled networking backend, verifies rejected-option observability with a sentinel, and lists only AVOptions actually consumed through top-level `stream-lavf-o` and nested-HLS `demuxer-lavf-o`. This is syntax/backend evidence, not a recovery-behavior claim. It also inspects the actual live mpv IPC pipe DACL in memory and retains only identity classes, never the pipe name or user SID. Use `-SkipVisualChecks` only for automated diagnostics; it leaves visible-video and audible-audio confirmation explicitly open.
 
 ## Process boundary
 

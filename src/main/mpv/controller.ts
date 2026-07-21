@@ -297,6 +297,7 @@ export class MpvController {
     vsrRequested: false,
   };
   private videoDiagnostics: VideoDiagnosticSnapshot | null = null;
+  private readonly baselineStages = new Map<number, Set<string>>();
 
   constructor(
     private readonly runtime: VerifiedMpvRuntime,
@@ -315,6 +316,7 @@ export class MpvController {
   async start(input?: MpvPlaybackInput): Promise<void> {
     this.input = input ?? null;
     this.generation = input ? 1 : 0;
+    this.beginBaselineGeneration(this.generation);
     this.logger.write("mpv-sports-motion-profile-selected", this.generation, {
       contentFieldOrder: this.sportsFixture?.contentFieldOrder ?? "unknown",
       deinterlaceEnabled: this.deinterlacePolicy.enabled,
@@ -557,6 +559,7 @@ export class MpvController {
         );
       }
       if (message.event === "playback-restart") {
+        this.logBaselineStage("first-frame", eventGeneration);
         this.onPlaybackStatus({
           generation: eventGeneration,
           kind: "playing",
@@ -724,6 +727,15 @@ export class MpvController {
     if (!property) return;
     if (pending.performanceSample) {
       const value = message.data;
+      if (
+        property === "playback-time" &&
+        result === "success" &&
+        typeof value === "number" &&
+        value >= 0 &&
+        this.baselineStages.get(pending.generation)?.has("first-frame")
+      ) {
+        this.logBaselineStage("playback", pending.generation);
+      }
       if (property === "video-frame-info" && isRecord(value)) {
         this.logger.write("mpv-frame-info-sample", pending.generation, {
           interlaced:
@@ -1084,10 +1096,42 @@ export class MpvController {
       channelId: input.channelId ?? "development-playlist",
       transport: input.transport,
     });
+    this.logBaselineStage("request", this.generation, input.transport);
+  }
+
+  private logBaselineStage(
+    stage:
+      | "first-frame"
+      | "playback"
+      | "request"
+      | "shutdown-complete"
+      | "shutdown-start"
+      | "start",
+    generation: number,
+    transport = this.input?.transport ?? "unknown",
+  ): void {
+    let stages = this.baselineStages.get(generation);
+    if (!stages) {
+      stages = new Set<string>();
+      this.baselineStages.set(generation, stages);
+    }
+    if (stages.has(stage)) return;
+    stages.add(stage);
+    this.logger.write("playback-baseline-stage", generation, {
+      stage,
+      transport,
+    });
+  }
+
+  private beginBaselineGeneration(generation: number): void {
+    this.baselineStages.clear();
+    this.logBaselineStage("start", generation);
   }
 
   reserveGeneration(): number {
-    return ++this.generation;
+    const generation = ++this.generation;
+    this.beginBaselineGeneration(generation);
+    return generation;
   }
 
   isCurrentGeneration(generation: number): boolean {
@@ -1112,6 +1156,7 @@ export class MpvController {
       throw new Error("mpv-not-ready");
     }
     const generation = ++this.generation;
+    this.beginBaselineGeneration(generation);
     this.sendTracked(instance, "playlist-step", generation, (id) =>
       createPlaylistStepCommand(direction, id),
     );
@@ -1388,6 +1433,7 @@ export class MpvController {
 
   private async performShutdown(): Promise<void> {
     this.shuttingDown = true;
+    this.logBaselineStage("shutdown-start", this.generation);
     this.replacementArmed = false;
     if (this.replacementTimer) clearTimeout(this.replacementTimer);
     this.replacementTimer = null;
@@ -1410,6 +1456,7 @@ export class MpvController {
       pipeReachable,
       processAlive,
     });
+    this.logBaselineStage("shutdown-complete", this.generation);
   }
 
   private async terminateInstance(

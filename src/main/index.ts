@@ -38,6 +38,7 @@ import {
   selectD3d11Adapter,
 } from "./mpv/hardware-profile";
 import {
+  parseSlice8HarnessInput,
   readLocalPlaybackInput,
   readSlice6SyntheticInput,
   readSlice7SyntheticInput,
@@ -47,7 +48,11 @@ import {
   resolveDeinterlacePolicy,
   resolveSportsFixtureProfile,
 } from "./mpv/sports-profile";
-import { StructuredPlaybackLogger } from "./mpv/structured-log";
+import {
+  STRUCTURED_LOG_MAX_BYTES,
+  STRUCTURED_LOG_RETAINED_FILES,
+  StructuredPlaybackLogger,
+} from "./mpv/structured-log";
 import { nativeWindowHandleToWid } from "./native-window";
 import { XtreamUtilityClient } from "./provider/client";
 import { XtreamCredentialService } from "./provider/credentials";
@@ -789,10 +794,12 @@ function createOverlayWindow(parent: BrowserWindow): BrowserWindow {
 function configureControlledAcceptance(window: BrowserWindow): void {
   const slice6 = process.env.COAX_SLICE6_ACCEPTANCE === "1";
   const slice7 = process.env.COAX_SLICE7_ACCEPTANCE === "1";
-  if (!slice6 && !slice7) return;
+  const slice8 = process.env.COAX_SLICE8_ACCEPTANCE === "1";
+  if (!slice6 && !slice7 && !slice8) return;
   if (
     process.env.COAX_SLICE6_FULLSCREEN === "1" ||
-    process.env.COAX_SLICE7_FULLSCREEN === "1"
+    process.env.COAX_SLICE7_FULLSCREEN === "1" ||
+    process.env.COAX_SLICE8_FULLSCREEN === "1"
   ) {
     window.setFullScreen(true);
   }
@@ -812,9 +819,11 @@ function configureControlledAcceptance(window: BrowserWindow): void {
       if (!window.isDestroyed()) window.setFullScreen(true);
     }, 15_000);
   }
-  const rawAutoExit = slice7
-    ? process.env.COAX_SLICE7_AUTO_EXIT_SECONDS
-    : process.env.COAX_SLICE6_AUTO_EXIT_SECONDS;
+  const rawAutoExit = slice8
+    ? process.env.COAX_SLICE8_AUTO_EXIT_SECONDS
+    : slice7
+      ? process.env.COAX_SLICE7_AUTO_EXIT_SECONDS
+      : process.env.COAX_SLICE6_AUTO_EXIT_SECONDS;
   if (rawAutoExit && /^\d{1,4}$/.test(rawAutoExit)) {
     const seconds = Number(rawAutoExit);
     if (seconds >= 5 && seconds <= 2_000) {
@@ -885,9 +894,16 @@ async function startM0Playback(
 
   const applicationRoot = app.getAppPath();
   playbackLogger = new StructuredPlaybackLogger(applicationRoot);
+  playbackLogger.write("diagnostic-session-started", 0, {
+    logMaxBytes: STRUCTURED_LOG_MAX_BYTES,
+    logRetainedFiles: STRUCTURED_LOG_RETAINED_FILES,
+    schemaVersion: 1,
+  });
   const slice6Acceptance = process.env.COAX_SLICE6_ACCEPTANCE === "1";
   const slice7Acceptance = process.env.COAX_SLICE7_ACCEPTANCE === "1";
-  const controlledAcceptance = slice6Acceptance || slice7Acceptance;
+  const slice8Acceptance = process.env.COAX_SLICE8_ACCEPTANCE === "1";
+  const controlledAcceptance =
+    slice6Acceptance || slice7Acceptance || slice8Acceptance;
   let syntheticInput = null;
   if (slice6Acceptance) {
     try {
@@ -920,6 +936,23 @@ async function startM0Playback(
         reason: "invalid-synthetic-input",
       });
       throw new Error("invalid-slice7-synthetic-input");
+    }
+  } else if (slice8Acceptance) {
+    try {
+      syntheticInput = parseSlice8HarnessInput(
+        process.env.COAX_SLICE8_PLAYER_URL,
+        process.env.COAX_SLICE8_FIXTURE_ID,
+      );
+      playbackLogger.write("slice8-harness-input", 0, {
+        configured: syntheticInput !== null,
+        fixtureId: process.env.COAX_SLICE8_FIXTURE_ID ?? "missing",
+      });
+    } catch {
+      playbackLogger.write("slice8-harness-input", 0, {
+        configured: false,
+        reason: "invalid-harness-input",
+      });
+      throw new Error("invalid-slice8-harness-input");
     }
   }
   const credentials = new XtreamCredentialService(
