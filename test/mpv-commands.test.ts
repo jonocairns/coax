@@ -95,19 +95,23 @@ describe("mpv command construction", () => {
     });
   });
 
-  it("constructs only labelled Slice 6 video-filter mutations", () => {
+  it("constructs only fixed labelled video-filter graph mutations", () => {
     expect(
       createVideoFilterCommand(
-        "add",
-        "@coax-vsr:d3d11vpp=scale=3:scaling-mode=nvidia",
+        "set",
+        "@coax-video:d3d11vpp=deint=yes:interlaced-only=yes:mode=adaptive:parity=auto:scale=3:scaling-mode=nvidia",
         104,
       ),
     ).toEqual({
-      command: ["vf", "add", "@coax-vsr:d3d11vpp=scale=3:scaling-mode=nvidia"],
+      command: [
+        "vf",
+        "set",
+        "@coax-video:d3d11vpp=deint=yes:interlaced-only=yes:mode=adaptive:parity=auto:scale=3:scaling-mode=nvidia",
+      ],
       request_id: 104,
     });
-    expect(createVideoFilterCommand("remove", "@coax-vsr", 105)).toEqual({
-      command: ["vf", "remove", "@coax-vsr"],
+    expect(createVideoFilterCommand("set", "", 105)).toEqual({
+      command: ["vf", "set", ""],
       request_id: 105,
     });
   });

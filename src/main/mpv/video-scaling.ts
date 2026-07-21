@@ -1,4 +1,3 @@
-export const COAX_VSR_FILTER_LABEL = "coax-vsr";
 export const MAX_VSR_SCALE_FACTOR = 4;
 
 export interface VideoSize {
@@ -78,32 +77,6 @@ export function decideVideoScaling(
     scaleFactor,
     vsrRequested: true,
   };
-}
-
-export function isCoaxVsrFilterAttached(value: unknown): boolean {
-  if (!Array.isArray(value)) return false;
-  return value.some(
-    (entry) =>
-      typeof entry === "object" &&
-      entry !== null &&
-      !Array.isArray(entry) &&
-      "label" in entry &&
-      entry.label === COAX_VSR_FILTER_LABEL &&
-      "name" in entry &&
-      entry.name === "d3d11vpp" &&
-      (!("enabled" in entry) || entry.enabled !== false),
-  );
-}
-
-export function createVsrFilterSpec(scaleFactor: number): string {
-  if (
-    !Number.isFinite(scaleFactor) ||
-    scaleFactor <= 1 ||
-    scaleFactor > MAX_VSR_SCALE_FACTOR
-  ) {
-    throw new Error("invalid-vsr-scale-factor");
-  }
-  return `@${COAX_VSR_FILTER_LABEL}:d3d11vpp=scale=${scaleFactor}:scaling-mode=nvidia`;
 }
 
 export function isCurrentScalingGeneration(

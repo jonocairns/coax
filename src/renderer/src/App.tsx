@@ -26,11 +26,18 @@ export function App(): React.JSX.Element {
 
   useControllerNavigation(handleControllerAction);
 
-  if (versions?.slice6Acceptance) {
+  if (versions?.slice6Acceptance || versions?.slice7Acceptance) {
     return (
       <main className="shell-surface">
-        <p className="eyebrow">M0b · Slice 6 · controlled native run</p>
-        <h1>Hardware playback benchmark</h1>
+        <p className="eyebrow">
+          M0b · {versions.slice7Acceptance ? "Slice 7" : "Slice 6"} · controlled
+          native run
+        </p>
+        <h1>
+          {versions.slice7Acceptance
+            ? "Sports motion benchmark"
+            : "Hardware playback benchmark"}
+        </h1>
         <p>
           The synthetic fixture and fixed profile are controlled by the native
           acceptance harness. Development playback controls are disabled for

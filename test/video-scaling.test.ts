@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  createVsrFilterSpec,
   decideVideoScaling,
-  isCoaxVsrFilterAttached,
   isCurrentScalingGeneration,
 } from "../src/main/mpv/video-scaling";
 
@@ -54,19 +52,7 @@ describe("viewport-aware video scaling", () => {
     ).toBe(false);
   });
 
-  it("distinguishes a requested filter from an attached filter and rejects stale generations", () => {
-    const spec = createVsrFilterSpec(3);
-    expect(spec).toBe("@coax-vsr:d3d11vpp=scale=3:scaling-mode=nvidia");
-    expect(
-      isCoaxVsrFilterAttached([
-        {
-          label: "coax-vsr",
-          name: "d3d11vpp",
-          params: { scale: "3", "scaling-mode": "nvidia" },
-        },
-      ]),
-    ).toBe(true);
-    expect(isCoaxVsrFilterAttached([])).toBe(false);
+  it("rejects stale scaling generations", () => {
     expect(isCurrentScalingGeneration(8, 8)).toBe(true);
     expect(isCurrentScalingGeneration(8, 7)).toBe(false);
   });

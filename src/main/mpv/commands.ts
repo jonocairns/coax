@@ -7,20 +7,29 @@ export interface MpvCommand {
 }
 
 export type MpvDiagnosticProperty =
+  | "audio-pts"
+  | "avsync"
+  | "container-fps"
   | "current-gpu-context"
   | "current-vo"
   | "decoder-frame-drop-count"
+  | "display-fps"
+  | "estimated-display-fps"
   | "estimated-vf-fps"
   | "frame-drop-count"
   | "hwdec-current"
   | "hwdec-interop"
+  | "mistimed-frame-count"
   | "osd-height"
   | "osd-width"
   | "playback-time"
+  | "total-avsync-change"
   | "track-list"
   | "vf"
   | "video-out-params"
-  | "video-params";
+  | "video-params"
+  | "video-frame-info"
+  | "vo-delayed-frame-count";
 
 export function createMpvPipeName(processId: number): string {
   const nonce = randomBytes(24).toString("hex");
@@ -121,7 +130,7 @@ export function createGetPropertyCommand(
 }
 
 export function createVideoFilterCommand(
-  operation: "add" | "remove",
+  operation: "add" | "remove" | "set",
   value: string,
   requestId: number,
 ): MpvCommand {

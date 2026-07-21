@@ -40,8 +40,13 @@ import {
 import {
   readLocalPlaybackInput,
   readSlice6SyntheticInput,
+  readSlice7SyntheticInput,
 } from "./mpv/playback-input";
 import { loadVerifiedMpvRuntime } from "./mpv/runtime-manifest";
+import {
+  resolveDeinterlacePolicy,
+  resolveSportsFixtureProfile,
+} from "./mpv/sports-profile";
 import { StructuredPlaybackLogger } from "./mpv/structured-log";
 import { nativeWindowHandleToWid } from "./native-window";
 import { XtreamUtilityClient } from "./provider/client";
@@ -84,6 +89,7 @@ function runtimeVersions(): RuntimeVersions {
     electron: process.versions.electron,
     node: process.versions.node,
     slice6Acceptance: process.env.COAX_SLICE6_ACCEPTANCE === "1",
+    slice7Acceptance: process.env.COAX_SLICE7_ACCEPTANCE === "1",
   };
 }
 
@@ -780,12 +786,17 @@ function createOverlayWindow(parent: BrowserWindow): BrowserWindow {
   return window;
 }
 
-function configureSlice6Acceptance(window: BrowserWindow): void {
-  if (process.env.COAX_SLICE6_ACCEPTANCE !== "1") return;
-  if (process.env.COAX_SLICE6_FULLSCREEN === "1") {
+function configureControlledAcceptance(window: BrowserWindow): void {
+  const slice6 = process.env.COAX_SLICE6_ACCEPTANCE === "1";
+  const slice7 = process.env.COAX_SLICE7_ACCEPTANCE === "1";
+  if (!slice6 && !slice7) return;
+  if (
+    process.env.COAX_SLICE6_FULLSCREEN === "1" ||
+    process.env.COAX_SLICE7_FULLSCREEN === "1"
+  ) {
     window.setFullScreen(true);
   }
-  if (process.env.COAX_SLICE6_VIEWPORT_CYCLE === "1") {
+  if (slice6 && process.env.COAX_SLICE6_VIEWPORT_CYCLE === "1") {
     setTimeout(() => {
       if (window.isDestroyed()) return;
       window.setFullScreen(false);
@@ -801,10 +812,12 @@ function configureSlice6Acceptance(window: BrowserWindow): void {
       if (!window.isDestroyed()) window.setFullScreen(true);
     }, 15_000);
   }
-  const rawAutoExit = process.env.COAX_SLICE6_AUTO_EXIT_SECONDS;
+  const rawAutoExit = slice7
+    ? process.env.COAX_SLICE7_AUTO_EXIT_SECONDS
+    : process.env.COAX_SLICE6_AUTO_EXIT_SECONDS;
   if (rawAutoExit && /^\d{1,4}$/.test(rawAutoExit)) {
     const seconds = Number(rawAutoExit);
-    if (seconds >= 5 && seconds <= 900) {
+    if (seconds >= 5 && seconds <= 2_000) {
       setTimeout(() => app.quit(), seconds * 1_000);
     }
   }
@@ -822,7 +835,7 @@ function createMainWindow(): BrowserWindow {
   secureLocalRenderer(window);
   window.once("ready-to-show", () => {
     window.show();
-    configureSlice6Acceptance(window);
+    configureControlledAcceptance(window);
     alignNativeLayers(window);
 
     if (process.env.COAX_SMOKE_TEST === "1") {
@@ -873,6 +886,8 @@ async function startM0Playback(
   const applicationRoot = app.getAppPath();
   playbackLogger = new StructuredPlaybackLogger(applicationRoot);
   const slice6Acceptance = process.env.COAX_SLICE6_ACCEPTANCE === "1";
+  const slice7Acceptance = process.env.COAX_SLICE7_ACCEPTANCE === "1";
+  const controlledAcceptance = slice6Acceptance || slice7Acceptance;
   let syntheticInput = null;
   if (slice6Acceptance) {
     try {
@@ -890,6 +905,22 @@ async function startM0Playback(
       });
       throw new Error("invalid-slice6-synthetic-input");
     }
+  } else if (slice7Acceptance) {
+    try {
+      syntheticInput = await readSlice7SyntheticInput(
+        applicationRoot,
+        process.env.COAX_SLICE7_FIXTURE_NAME,
+      );
+      playbackLogger.write("slice7-synthetic-input", 0, {
+        configured: syntheticInput !== null,
+      });
+    } catch {
+      playbackLogger.write("slice7-synthetic-input", 0, {
+        configured: false,
+        reason: "invalid-synthetic-input",
+      });
+      throw new Error("invalid-slice7-synthetic-input");
+    }
   }
   const credentials = new XtreamCredentialService(
     safeStorage,
@@ -897,7 +928,7 @@ async function startM0Playback(
     app.getPath("userData"),
   );
   let credentialStatus: "available" | "missing" = "missing";
-  if (!slice6Acceptance) {
+  if (!controlledAcceptance) {
     try {
       const result = await credentials.initialize();
       credentialStatus = result.status;
@@ -919,7 +950,7 @@ async function startM0Playback(
 
   let input = syntheticInput;
   try {
-    if (!slice6Acceptance && credentialStatus === "missing") {
+    if (!controlledAcceptance && credentialStatus === "missing") {
       input = await readLocalPlaybackInput(applicationRoot);
     }
   } catch {
@@ -927,7 +958,7 @@ async function startM0Playback(
       reason: "invalid-local-input",
     });
   }
-  if (!slice6Acceptance && credentialStatus === "missing") {
+  if (!controlledAcceptance && credentialStatus === "missing") {
     if (!input) {
       playbackLogger.write("playback-input-missing", 0, {
         reason: "local-input-not-configured",
@@ -984,12 +1015,24 @@ async function startM0Playback(
     const profile = resolveMpvPlaybackProfile(
       process.env.COAX_M0_PLAYBACK_PROFILE,
     );
+    const deinterlacePolicy = resolveDeinterlacePolicy(
+      process.env.COAX_M0_FIELD_ORDER_OVERRIDE,
+      slice7Acceptance &&
+        process.env.COAX_SLICE7_FORCE_DEINTERLACE_FAILURE === "1",
+      !slice6Acceptance,
+    );
+    const sportsFixture = slice7Acceptance
+      ? resolveSportsFixtureProfile(process.env.COAX_SLICE7_FIXTURE_NAME)
+      : null;
     playbackLogger.write("mpv-profile-selected", 0, {
       adapter: adapterSelection.adapter.description,
       adapterDefault: adapterSelection.defaultAdapter.description,
       adapterExplicit: adapterSelection.explicit,
       adapterSelectionReason: adapterSelection.reason,
       fallbackScaler: profile.fallbackScaler,
+      deinterlaceFieldOrder: deinterlacePolicy.fieldOrder,
+      deinterlaceInterlacedOnly: deinterlacePolicy.interlacedOnly,
+      deinterlaceMode: deinterlacePolicy.mode,
       gpuApi: "d3d11",
       gpuContext: "d3d11",
       hwdecRequested: profile.hwdec,
@@ -1004,12 +1047,14 @@ async function startM0Playback(
       join(applicationRoot, "scripts", "raise-mpv-child-window.ps1"),
       profile,
       adapterSelection,
+      deinterlacePolicy,
+      sportsFixture,
       handleMpvPlaybackStatus,
     );
     await mpvController.start(input ?? undefined);
     videoPlaybackReady = input !== null;
     if (videoPlaybackReady) scheduleGeometrySynchronization(window, "ready");
-    if (!slice6Acceptance && credentialStatus === "available") {
+    if (!controlledAcceptance && credentialStatus === "available") {
       providerClient = new XtreamUtilityClient(
         join(__dirname, "provider-worker.js"),
       );

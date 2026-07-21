@@ -1,6 +1,6 @@
 # Coax
 
-Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0b Slice 6: hardware decode, adapter selection, and viewport-aware 720p→4K scaling** on top of the secure Electron/React foundation, pinned Windows x64 mpv child, selected Path A overlay, and Slice 5 safeStorage-backed Xtream path. Native evidence selects D3D11VA on the target RTX 5080 as the safe default. The NVIDIA D3D11VPP request is observable as requested and attached, but no reliable confirmation signal was available, so Coax does not label VSR active. The NVDEC hardware row, inherited controller and multi-monitor/DPI rows, and Slice 5 native invalid-auth row remain open. Sports/deinterlacing, EPG/SQLite, the full recovery supervisor, and production credential UX have not begun.
+Coax is a Windows-first live-TV player focused on playback resilience. This repository currently contains **M0b Slice 7: sports motion baseline** on top of the secure Electron/React foundation, pinned Windows x64 mpv child, selected Path A overlay, Slice 5 safeStorage-backed Xtream path, and Slice 6 D3D11VA/viewport-aware scaling baseline. The selected target path uses D3D11VPP adaptive deinterlacing with automatic or explicit field parity, one atomically replaced owned video-filter graph, a software fallback, and cadence/drop/repeat/A/V-drift/reconfiguration diagnostics. Controlled native fixtures reached the expected 50 or 59.94 fps cadence without post-warm-up drop/repeat growth; visual motion/combing judgments and the interrupted 30-minute row remain open. Coax still does not label VSR active without a demonstrated confirmation signal. The NVDEC hardware row, inherited controller and multi-monitor/DPI rows, and Slice 5 native invalid-auth row also remain open. Slice 8, EPG/SQLite, the broader recovery supervisor, and production credential UX have not begun.
 
 ## Versions
 
@@ -227,6 +227,35 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-slice6-acc
 The harness builds once, launches the built pinned Electron application without a development server, records sanitized GPU/adapter/profile/decoder/render/size/scaler states, samples mpv resources and dropped-frame properties, and cleans up the owned process tree. `Compare` uses the same clean local 720p50 fixture for D3D11VA, NVDEC, and software. `Soak` includes a 30-second warm-up followed by the required ten-minute measurement. `Resolution` changes both source and viewport sizes. `Fallback` uses a locally generated H.264 format unsupported by the hardware decoder and requires continuing software playback. Raw fixture media, logs, adapter output, and result JSON remain only under ignored native `artifacts/m0/`; do not copy them back to WSL or commit them.
 
 Diagnostics deliberately separate `vsrRequested`, `vsrFilterAttached`, and `vsrConfirmed`. Successful D3D11VPP attachment or NVIDIA presence is not confirmation that RTX VSR processed the video. Unless a reliable external confirmation signal is observed, `vsrConfirmed` remains false and `vsrConfirmationSignal` remains `unavailable`.
+
+## Native Slice 7 acceptance
+
+Generate and verify the controlled sports fixtures directly in the ignored artifact tree of the protected native mirror:
+
+```bash
+nix develop -c bash -lc './scripts/create-slice7-fixtures.sh'
+```
+
+At the start of native work, record the exact benchmark configuration and available inputs before running the acceptance modes. A changed Windows/GPU driver/display/audio/Electron/mpv/FFmpeg/source configuration starts a new result series. From native Windows PowerShell:
+
+```powershell
+$common = @{
+  SkipInstall = $true
+  DisplayModel = '<display model>'
+  AudioOutput = '<audio output>'
+  SourceRevision = '<git revision>'
+  SourceDirty = $true
+}
+
+& .\scripts\windows-slice7-acceptance.ps1 @common -Mode Record
+& .\scripts\windows-slice7-acceptance.ps1 @common -Mode Progressive
+& .\scripts\windows-slice7-acceptance.ps1 @common -Mode Interlaced
+& .\scripts\windows-slice7-acceptance.ps1 @common -Mode WrongFieldOrder
+& .\scripts\windows-slice7-acceptance.ps1 @common -Mode Fallback
+& .\scripts\windows-slice7-acceptance.ps1 @common -Mode Soak
+```
+
+The harness uses local 720p50/59.94, 576i50, 1080i50, TFF/BFF, deliberately wrong-metadata, and long-run fixtures. It records actual decode/render/deinterlace state, field metadata and override, atomic graph reconfiguration, duplicate owned filters, output cadence, dropped/delayed/repeated frames, A/V drift, recovery, resources, and clean shutdown. `-SkipVisualChecks` is useful for automated diagnostics, but it explicitly leaves smooth motion, combing, judder, wrong-order diagnosis, and recovered field order unobserved; filter attachment or a 50 fps property is not a visual pass. Raw media, console output, logs, resource samples, and result JSON remain only under ignored native `artifacts/m0/<run-id>/` paths.
 
 ## Process boundary
 

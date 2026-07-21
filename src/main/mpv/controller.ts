@@ -22,15 +22,23 @@ import {
 import { JsonLineParser } from "./json-lines";
 import type { MpvPlaybackInput } from "./playback-input";
 import type { VerifiedMpvRuntime } from "./runtime-manifest";
+import type { DeinterlacePolicy, SportsFixtureProfile } from "./sports-profile";
 import {
   StructuredPlaybackLogger,
   type StructuredLogValue,
 } from "./structured-log";
 import {
-  COAX_VSR_FILTER_LABEL,
-  createVsrFilterSpec,
+  createD3d11VideoFilterGraph,
+  createSoftwareDeinterlaceFallbackGraph,
+  fallbackPathAfterFailure,
+  inspectVideoFilterGraph,
+  isCurrentVideoFilterGraph,
+  type VideoFilterGraphDecision,
+  type VideoFilterGraphInspection,
+  type VideoFilterPath,
+} from "./video-filter-graph";
+import {
   decideVideoScaling,
-  isCoaxVsrFilterAttached,
   isCurrentScalingGeneration,
   type VideoScaleDecision,
 } from "./video-scaling";
@@ -55,7 +63,7 @@ type TrackedCommandKind =
   | "observe-paused-for-cache"
   | "playlist-position"
   | "playlist-step"
-  | "scaler-filter";
+  | "video-filter";
 
 interface PendingCommand {
   diagnosticProperty?: MpvDiagnosticProperty;
@@ -64,7 +72,8 @@ interface PendingCommand {
   instanceId: number;
   kind: TrackedCommandKind;
   performanceSample?: boolean;
-  scalingRevision?: number;
+  graphRevision?: number;
+  videoFilterPath?: VideoFilterPath;
 }
 
 interface OwnedMpvInstance {
@@ -87,8 +96,11 @@ interface VideoDiagnosticSnapshot {
   currentGpuContext: string | null;
   currentVo: string | null;
   decoder: string | null;
-  filterAttached: boolean;
+  filterGraph: VideoFilterGraphInspection;
   forceScaling: boolean;
+  frameInterlaced: boolean | null;
+  frameRepeat: boolean | null;
+  frameTff: boolean | null;
   hwdecCurrent: string | null;
   hwdecInterop: string | null;
   id: number;
@@ -265,12 +277,22 @@ export class MpvController {
   private shuttingDown = false;
   private stackingSynchronizationInFlight = false;
   private diagnosticSequence = 0;
-  private scalingRevision = 0;
+  private graphRevision = 0;
   private filterReconfigDeadline = 0;
-  private appliedScalingSignature: string | null = null;
+  private appliedGraphSignature: string | null = null;
+  private forcedHardwareFailureRevision = 0;
   private scalingDecision: VideoScaleDecision = {
     fallbackScaler: "ewa_lanczossharp",
     reason: "invalid-dimensions",
+    scaleFactor: null,
+    vsrRequested: false,
+  };
+  private videoFilterGraph: VideoFilterGraphDecision = {
+    deinterlaceRequested: false,
+    fieldOrder: "auto",
+    filterSpec: "",
+    interlacedOnly: true,
+    path: "clear",
     scaleFactor: null,
     vsrRequested: false,
   };
@@ -283,6 +305,8 @@ export class MpvController {
     private readonly windowStackingHelperPath: string,
     private readonly profile: MpvPlaybackProfile,
     private readonly adapterSelection: AdapterSelection,
+    private readonly deinterlacePolicy: DeinterlacePolicy,
+    private readonly sportsFixture: SportsFixtureProfile | null,
     private readonly onPlaybackStatus: (
       event: MpvPlaybackStatusEvent,
     ) => void = () => undefined,
@@ -291,6 +315,17 @@ export class MpvController {
   async start(input?: MpvPlaybackInput): Promise<void> {
     this.input = input ?? null;
     this.generation = input ? 1 : 0;
+    this.logger.write("mpv-sports-motion-profile-selected", this.generation, {
+      contentFieldOrder: this.sportsFixture?.contentFieldOrder ?? "unknown",
+      deinterlaceEnabled: this.deinterlacePolicy.enabled,
+      deinterlaceMode: this.deinterlacePolicy.mode,
+      expectedOutputFps: this.sportsFixture?.expectedOutputFps ?? null,
+      fieldOrder: this.deinterlacePolicy.fieldOrder,
+      forceHardwareFailure: this.deinterlacePolicy.forceHardwareFailure,
+      interlacedOnly: this.deinterlacePolicy.interlacedOnly,
+      metadataFieldOrder: this.sportsFixture?.metadataFieldOrder ?? "unknown",
+      sourceScan: this.sportsFixture?.scan ?? "unknown",
+    });
     const instance = await this.spawnAndConnect("initial");
     if (input) this.sendLoad(instance, input);
     this.replacementArmed = true;
@@ -496,21 +531,29 @@ export class MpvController {
       }
       this.logger.write("mpv-event", eventGeneration, details);
       if (message.event === "start-file") {
-        this.appliedScalingSignature = null;
+        this.appliedGraphSignature = null;
         this.scalingDecision = {
           fallbackScaler: this.profile.fallbackScaler,
           reason: "invalid-dimensions",
           scaleFactor: null,
           vsrRequested: false,
         };
-        const scalingRevision = ++this.scalingRevision;
+        this.videoFilterGraph = {
+          deinterlaceRequested: false,
+          fieldOrder: this.deinterlacePolicy.fieldOrder,
+          filterSpec: "",
+          interlacedOnly: this.deinterlacePolicy.interlacedOnly,
+          path: "clear",
+          scaleFactor: null,
+          vsrRequested: false,
+        };
+        const graphRevision = ++this.graphRevision;
         this.sendTracked(
           instance,
-          "scaler-filter",
+          "video-filter",
           this.generation,
-          (id) =>
-            createVideoFilterCommand("remove", `@${COAX_VSR_FILTER_LABEL}`, id),
-          { scalingRevision },
+          (id) => createVideoFilterCommand("set", "", id),
+          { graphRevision, videoFilterPath: "clear" },
         );
       }
       if (message.event === "playback-restart") {
@@ -527,6 +570,13 @@ export class MpvController {
         this.requestWindowStackingSynchronization(instance);
       }
       if (message.event === "video-reconfig") {
+        this.logger.write("mpv-video-reconfiguration", eventGeneration, {
+          graphRevision: this.graphRevision,
+          reason:
+            performance.now() <= this.filterReconfigDeadline
+              ? "filter-video-reconfig"
+              : "source-video-reconfig",
+        });
         this.refreshVideoDiagnostics(
           instance,
           performance.now() <= this.filterReconfigDeadline
@@ -569,22 +619,53 @@ export class MpvController {
       return;
     }
 
-    if (pending.kind === "scaler-filter") {
+    if (pending.kind === "video-filter") {
       const currentGeneration = isCurrentScalingGeneration(
         this.generation,
         pending.generation,
       );
-      this.logger.write("mpv-scaler-command-result", pending.generation, {
-        accepted:
-          currentGeneration && pending.scalingRevision === this.scalingRevision,
-        result,
-        scalingRevision: pending.scalingRevision ?? null,
-      });
-      if (
+      const currentRevision =
         currentGeneration &&
-        pending.scalingRevision === this.scalingRevision
-      ) {
+        isCurrentVideoFilterGraph(
+          this.generation,
+          pending.generation,
+          this.graphRevision,
+          pending.graphRevision,
+        );
+      const forceHardwareFailure =
+        currentRevision &&
+        pending.videoFilterPath === "d3d11vpp" &&
+        this.deinterlacePolicy.forceHardwareFailure &&
+        this.forcedHardwareFailureRevision !== pending.graphRevision;
+      if (forceHardwareFailure) {
+        this.forcedHardwareFailureRevision = pending.graphRevision ?? 0;
+      }
+      const effectiveResult = forceHardwareFailure ? "forced-failure" : result;
+      const fallbackPath = fallbackPathAfterFailure(
+        pending.videoFilterPath ?? "clear",
+      );
+      this.logger.write("mpv-video-graph-command-result", pending.generation, {
+        accepted: currentRevision,
+        actualResult: result,
+        graphRevision: pending.graphRevision ?? null,
+        path: pending.videoFilterPath ?? "clear",
+        result: effectiveResult,
+      });
+      this.logger.write("mpv-scaler-command-result", pending.generation, {
+        accepted: currentRevision,
+        result: effectiveResult,
+        scalingRevision: pending.graphRevision ?? null,
+      });
+      if (currentRevision && effectiveResult === "success") {
         this.refreshVideoDiagnostics(instance, "scaler-command-result", false);
+      } else if (
+        currentRevision &&
+        fallbackPath === "software-fallback" &&
+        this.videoFilterGraph.deinterlaceRequested
+      ) {
+        this.applySoftwareDeinterlaceFallback(instance, effectiveResult);
+      } else if (currentRevision && fallbackPath === "clear") {
+        this.applyPlayableClearFallback(instance, effectiveResult);
       }
       return;
     }
@@ -643,6 +724,16 @@ export class MpvController {
     if (!property) return;
     if (pending.performanceSample) {
       const value = message.data;
+      if (property === "video-frame-info" && isRecord(value)) {
+        this.logger.write("mpv-frame-info-sample", pending.generation, {
+          interlaced:
+            typeof value.interlaced === "boolean" ? value.interlaced : null,
+          repeat: typeof value.repeat === "boolean" ? value.repeat : null,
+          result,
+          tff: typeof value.tff === "boolean" ? value.tff : null,
+        });
+        return;
+      }
       this.logger.write("mpv-performance-sample", pending.generation, {
         property,
         result,
@@ -672,9 +763,11 @@ export class MpvController {
     if (result === "success") {
       this.applyDiagnosticProperty(snapshot, property, message.data);
     }
-    const instance = this.active;
-    if (instance) this.maybeApplyScaling(instance, snapshot);
-    if (snapshot.pending === 0) this.logVideoDiagnostics(snapshot);
+    if (snapshot.pending === 0) {
+      const instance = this.active;
+      if (instance) this.maybeApplyVideoFilterGraph(instance, snapshot);
+      this.logVideoDiagnostics(snapshot);
+    }
   }
 
   private applyDiagnosticProperty(
@@ -721,7 +814,13 @@ export class MpvController {
     ) {
       snapshot.currentGpuContext = normalizedCode(value);
     } else if (property === "vf") {
-      snapshot.filterAttached = isCoaxVsrFilterAttached(value);
+      snapshot.filterGraph = inspectVideoFilterGraph(value);
+    } else if (property === "video-frame-info" && isRecord(value)) {
+      snapshot.frameInterlaced =
+        typeof value.interlaced === "boolean" ? value.interlaced : null;
+      snapshot.frameRepeat =
+        typeof value.repeat === "boolean" ? value.repeat : null;
+      snapshot.frameTff = typeof value.tff === "boolean" ? value.tff : null;
     } else if (property === "track-list" && Array.isArray(value)) {
       const selectedVideo = value.find(
         (track) =>
@@ -760,13 +859,17 @@ export class MpvController {
       "current-gpu-context",
       "track-list",
       "vf",
+      "video-frame-info",
     ] as const satisfies readonly MpvDiagnosticProperty[];
     const snapshot: VideoDiagnosticSnapshot = {
       currentGpuContext: null,
       currentVo: null,
       decoder: null,
-      filterAttached: false,
+      filterGraph: inspectVideoFilterGraph(null),
       forceScaling,
+      frameInterlaced: null,
+      frameRepeat: null,
+      frameTff: null,
       hwdecCurrent: null,
       hwdecInterop: null,
       id: ++this.diagnosticSequence,
@@ -794,7 +897,7 @@ export class MpvController {
     }
   }
 
-  private maybeApplyScaling(
+  private maybeApplyVideoFilterGraph(
     instance: OwnedMpvInstance,
     snapshot: VideoDiagnosticSnapshot,
   ): void {
@@ -811,46 +914,109 @@ export class MpvController {
       { height: snapshot.viewportHeight, width: snapshot.viewportWidth },
       this.profile.requestVsr,
     );
+    const graph = createD3d11VideoFilterGraph(decision, this.deinterlacePolicy);
     const signature = JSON.stringify({
-      decision,
+      graph,
       sourceHeight: snapshot.sourceHeight,
       sourceWidth: snapshot.sourceWidth,
       viewportHeight: snapshot.viewportHeight,
       viewportWidth: snapshot.viewportWidth,
     });
-    if (!snapshot.forceScaling && signature === this.appliedScalingSignature) {
+    if (!snapshot.forceScaling && signature === this.appliedGraphSignature) {
       this.scalingDecision = decision;
       return;
     }
     snapshot.forceScaling = false;
-    this.appliedScalingSignature = signature;
+    this.appliedGraphSignature = signature;
     this.scalingDecision = decision;
-    const scalingRevision = ++this.scalingRevision;
+    this.videoFilterGraph = graph;
+    const graphRevision = ++this.graphRevision;
     this.filterReconfigDeadline = performance.now() + 1_500;
     this.sendTracked(
       instance,
-      "scaler-filter",
+      "video-filter",
       this.generation,
-      (id) =>
-        decision.vsrRequested && decision.scaleFactor !== null
-          ? createVideoFilterCommand(
-              "add",
-              createVsrFilterSpec(decision.scaleFactor),
-              id,
-            )
-          : createVideoFilterCommand("remove", `@${COAX_VSR_FILTER_LABEL}`, id),
-      { scalingRevision },
+      (id) => createVideoFilterCommand("set", graph.filterSpec, id),
+      { graphRevision, videoFilterPath: graph.path },
     );
-    this.logger.write("mpv-scaler-requested", this.generation, {
+    this.logger.write("mpv-video-graph-requested", this.generation, {
+      deinterlaceRequested: graph.deinterlaceRequested,
       fallbackScaler: decision.fallbackScaler,
+      fieldOrder: graph.fieldOrder,
+      graphRevision,
+      interlacedOnly: graph.interlacedOnly,
+      path: graph.path,
       reason: decision.reason,
       scaleFactor: decision.scaleFactor,
-      scalingRevision,
       sourceHeight: snapshot.sourceHeight,
       sourceWidth: snapshot.sourceWidth,
       viewportHeight: snapshot.viewportHeight,
       viewportWidth: snapshot.viewportWidth,
       vsrRequested: decision.vsrRequested,
+    });
+    this.logger.write("mpv-scaler-requested", this.generation, {
+      fallbackScaler: decision.fallbackScaler,
+      reason: decision.reason,
+      scaleFactor: decision.scaleFactor,
+      scalingRevision: graphRevision,
+      sourceHeight: snapshot.sourceHeight,
+      sourceWidth: snapshot.sourceWidth,
+      viewportHeight: snapshot.viewportHeight,
+      viewportWidth: snapshot.viewportWidth,
+      vsrRequested: decision.vsrRequested,
+    });
+  }
+
+  private applySoftwareDeinterlaceFallback(
+    instance: OwnedMpvInstance,
+    hardwareResult: string,
+  ): void {
+    const graph = createSoftwareDeinterlaceFallbackGraph(
+      this.deinterlacePolicy.fieldOrder,
+    );
+    this.videoFilterGraph = graph;
+    const graphRevision = ++this.graphRevision;
+    this.filterReconfigDeadline = performance.now() + 1_500;
+    this.sendTracked(
+      instance,
+      "video-filter",
+      this.generation,
+      (id) => createVideoFilterCommand("set", graph.filterSpec, id),
+      { graphRevision, videoFilterPath: graph.path },
+    );
+    this.logger.write("mpv-deinterlace-fallback-requested", this.generation, {
+      fieldOrder: graph.fieldOrder,
+      graphRevision,
+      hardwareResult,
+      path: graph.path,
+    });
+  }
+
+  private applyPlayableClearFallback(
+    instance: OwnedMpvInstance,
+    softwareResult: string,
+  ): void {
+    const graph: VideoFilterGraphDecision = {
+      deinterlaceRequested: false,
+      fieldOrder: this.deinterlacePolicy.fieldOrder,
+      filterSpec: "",
+      interlacedOnly: this.deinterlacePolicy.interlacedOnly,
+      path: "clear",
+      scaleFactor: null,
+      vsrRequested: false,
+    };
+    this.videoFilterGraph = graph;
+    const graphRevision = ++this.graphRevision;
+    this.sendTracked(
+      instance,
+      "video-filter",
+      this.generation,
+      (id) => createVideoFilterCommand("set", "", id),
+      { graphRevision, videoFilterPath: "clear" },
+    );
+    this.logger.write("mpv-deinterlace-fallback-failed", this.generation, {
+      graphRevision,
+      softwareResult,
     });
   }
 
@@ -863,6 +1029,8 @@ export class MpvController {
         this.profile,
         this.adapterSelection,
         this.scalingDecision,
+        this.deinterlacePolicy,
+        this.videoFilterGraph,
       ),
     );
   }
@@ -877,8 +1045,9 @@ export class MpvController {
         PendingCommand,
         | "diagnosticProperty"
         | "diagnosticRefreshId"
+        | "graphRevision"
         | "performanceSample"
-        | "scalingRevision"
+        | "videoFilterPath"
       >
     > = {},
   ): number {
@@ -1094,10 +1263,19 @@ export class MpvController {
         return;
       }
       const properties = [
+        "audio-pts",
+        "avsync",
+        "container-fps",
         "frame-drop-count",
         "decoder-frame-drop-count",
+        "display-fps",
+        "estimated-display-fps",
         "estimated-vf-fps",
+        "mistimed-frame-count",
         "playback-time",
+        "total-avsync-change",
+        "video-frame-info",
+        "vo-delayed-frame-count",
       ] as const satisfies readonly MpvDiagnosticProperty[];
       for (const property of properties) {
         try {
@@ -1114,7 +1292,7 @@ export class MpvController {
       }
     };
     sample();
-    instance.performanceInterval = setInterval(sample, 5_000);
+    instance.performanceInterval = setInterval(sample, 2_000);
   }
 
   private stopPerformanceSampling(instance: OwnedMpvInstance): void {

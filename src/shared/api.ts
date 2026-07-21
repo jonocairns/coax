@@ -27,6 +27,7 @@ export interface RuntimeVersions {
   electron: string;
   node: string;
   slice6Acceptance: boolean;
+  slice7Acceptance: boolean;
 }
 
 export interface PlaylistIntentResult {

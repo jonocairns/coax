@@ -54,4 +54,24 @@ describe("playback log redaction", () => {
     expect(serialized).not.toContain("fixture-token");
     expect(serialized).not.toContain("provider.invalid");
   });
+
+  it("keeps Slice 7 motion diagnostics structural when private fields are injected", () => {
+    const details = sanitizeLogDetails({
+      deinterlacePath: "d3d11vpp",
+      fieldOrder: "tff",
+      headers: "Authorization: fixture-token",
+      streamUrl:
+        "https://fixture-user:fixture-password@provider.invalid/live.ts",
+      voDropDelta: 0,
+    });
+    const serialized = JSON.stringify(details);
+
+    expect(details.deinterlacePath).toBe("d3d11vpp");
+    expect(details.fieldOrder).toBe("tff");
+    expect(details.voDropDelta).toBe(0);
+    expect(serialized).not.toContain("fixture-user");
+    expect(serialized).not.toContain("fixture-password");
+    expect(serialized).not.toContain("fixture-token");
+    expect(serialized).not.toContain("provider.invalid");
+  });
 });

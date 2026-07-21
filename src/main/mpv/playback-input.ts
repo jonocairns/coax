@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveSportsFixtureProfile } from "./sports-profile";
 
 export interface LocalPlaybackInput {
   streamUrl: string;
@@ -38,6 +39,29 @@ export async function readSlice6SyntheticInput(
   const metadata = await stat(path);
   if (!metadata.isFile() || metadata.size === 0) {
     throw new Error("invalid-slice6-fixture-file");
+  }
+  return { streamUrl: path, transport: "synthetic" };
+}
+
+export async function readSlice7SyntheticInput(
+  applicationRoot: string,
+  fixtureName: string | undefined,
+): Promise<MpvPlaybackInput | null> {
+  const profile = resolveSportsFixtureProfile(fixtureName);
+  if (!profile) {
+    if (!fixtureName) return null;
+    throw new Error("invalid-slice7-fixture-name");
+  }
+  const path = join(
+    applicationRoot,
+    "artifacts",
+    "m0",
+    "fixtures",
+    profile.fileName,
+  );
+  const metadata = await stat(path);
+  if (!metadata.isFile() || metadata.size === 0) {
+    throw new Error("invalid-slice7-fixture-file");
   }
   return { streamUrl: path, transport: "synthetic" };
 }
