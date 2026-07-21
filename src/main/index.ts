@@ -30,6 +30,10 @@ import {
   type OverlayState,
   type OverlayStateEvent,
 } from "../shared/overlay";
+import {
+  INITIAL_STREAM_STATS_SNAPSHOT,
+  type StreamStatsState,
+} from "../shared/stream-stats";
 import { MpvController, type MpvPlaybackStatusEvent } from "./mpv/controller";
 import { extractElectronGpuDiagnostics } from "./electron-gpu";
 import { enumerateD3d11Adapters } from "./mpv/hardware-probe";
@@ -87,6 +91,7 @@ let shutdownComplete = false;
 const geometryTimers = new Map<GeometryReason, ReturnType<typeof setTimeout>>();
 let overlayState: OverlayState = { ...INITIAL_OVERLAY_STATE };
 let overlayAutoHideTimer: ReturnType<typeof setTimeout> | null = null;
+let streamStatsVisible = false;
 
 function runtimeVersions(): RuntimeVersions {
   return {
@@ -127,6 +132,25 @@ function publishProviderState(): void {
       continue;
     }
     window.webContents.send(IPC_CHANNELS.providerStateChanged, providerState);
+  }
+}
+
+function currentStreamStatsState(): StreamStatsState {
+  return {
+    snapshot: mpvController?.getStreamStats() ?? {
+      ...INITIAL_STREAM_STATS_SNAPSHOT,
+    },
+    visible: streamStatsVisible,
+  };
+}
+
+function publishStreamStatsState(): void {
+  const state = currentStreamStatsState();
+  for (const window of [mainWindow, overlayWindow]) {
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+      continue;
+    }
+    window.webContents.send(IPC_CHANNELS.streamStatsStateChanged, state);
   }
 }
 
@@ -176,7 +200,15 @@ function hideOverlay(reason: string, returnFocus: boolean): void {
   clearOverlayAutoHide();
   const wasFocused = overlayState.focused;
   transitionOverlayState({ type: "hide" });
-  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    if (streamStatsVisible) {
+      overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+      overlayWindow.showInactive();
+      overlayWindow.moveTop();
+    } else {
+      overlayWindow.hide();
+    }
+  }
   playbackLogger?.write("overlay-hidden", overlayState.generation, { reason });
   if (returnFocus && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.focus();
@@ -251,6 +283,21 @@ function applyOverlayAction(action: OverlayAction): OverlayState {
   return overlayState;
 }
 
+function setStreamStatsVisible(visible: boolean): void {
+  streamStatsVisible = visible;
+  publishStreamStatsState();
+  if (visible) {
+    showOverlay(false, "stream-stats-shown");
+  } else if (overlayState.visible && !overlayState.focused) {
+    hideOverlay("stream-stats-hidden", false);
+  } else if (!overlayState.visible) {
+    overlayWindow?.hide();
+  }
+  playbackLogger?.write("stream-stats-visibility", overlayState.generation, {
+    visible,
+  });
+}
+
 function setOverlayPointerCapture(capture: boolean): void {
   const overlay = overlayWindow;
   if (!overlay || overlay.isDestroyed() || !overlayState.visible) return;
@@ -305,6 +352,14 @@ function registerIpcHandlers(): void {
       throw new Error("untrusted-renderer");
     return providerState;
   });
+  ipcMain.handle(
+    IPC_CHANNELS.getStreamStatsState,
+    (event): StreamStatsState => {
+      if (!isKnownRenderer(event.sender.id))
+        throw new Error("untrusted-renderer");
+      return currentStreamStatsState();
+    },
+  );
   ipcMain.handle(
     IPC_CHANNELS.playProviderChannel,
     async (event, channelId: unknown): Promise<ChannelPlaybackIntentResult> => {
@@ -506,6 +561,12 @@ function configureDevelopmentMenu(): void {
       {
         label: "View",
         submenu: [
+          {
+            click: (menuItem) => setStreamStatsVisible(menuItem.checked),
+            label: "Stream statistics",
+            type: "checkbox",
+          },
+          { type: "separator" },
           {
             accelerator: "F11",
             click: () => toggleMainWindowFullscreen(),

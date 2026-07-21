@@ -4,12 +4,14 @@ import type {
   ProviderViewState,
   RapidProviderPlaybackResult,
 } from "./provider";
+import type { StreamStatsState } from "./stream-stats";
 
 export const IPC_CHANNELS = {
   cycleTestChannel: "coax:cycle-test-channel",
   getRuntimeVersions: "coax:get-runtime-versions",
   getOverlayState: "coax:get-overlay-state",
   getProviderState: "coax:get-provider-state",
+  getStreamStatsState: "coax:get-stream-stats-state",
   overlayStateChanged: "coax:overlay-state-changed",
   playProviderChannel: "coax:play-provider-channel",
   providerStateChanged: "coax:provider-state-changed",
@@ -17,6 +19,7 @@ export const IPC_CHANNELS = {
   runRapidPlaylistTest: "coax:run-rapid-playlist-test",
   runRapidProviderTest: "coax:run-rapid-provider-test",
   setOverlayPointerCapture: "coax:set-overlay-pointer-capture",
+  streamStatsStateChanged: "coax:stream-stats-state-changed",
   toggleFullscreen: "coax:toggle-fullscreen",
 } as const;
 
@@ -48,8 +51,12 @@ export interface CoaxApi {
   getRuntimeVersions: () => Promise<RuntimeVersions>;
   getOverlayState: () => Promise<OverlayState>;
   getProviderState: () => Promise<ProviderViewState>;
+  getStreamStatsState: () => Promise<StreamStatsState>;
   onOverlayState: (listener: (state: OverlayState) => void) => () => void;
   onProviderState: (listener: (state: ProviderViewState) => void) => () => void;
+  onStreamStatsState: (
+    listener: (state: StreamStatsState) => void,
+  ) => () => void;
   playProviderChannel: (
     channelId: string,
   ) => Promise<ChannelPlaybackIntentResult>;

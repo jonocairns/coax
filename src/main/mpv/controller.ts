@@ -43,6 +43,11 @@ import {
   type VideoScaleDecision,
 } from "./video-scaling";
 import { createVideoDiagnosticDetails } from "./video-diagnostics";
+import { applyStreamPerformanceSample } from "./stream-stats";
+import {
+  INITIAL_STREAM_STATS_SNAPSHOT,
+  type StreamStatsSnapshot,
+} from "../../shared/stream-stats";
 
 const REQUIRED_MPV_EVENTS = new Set([
   "start-file",
@@ -298,6 +303,9 @@ export class MpvController {
   };
   private videoDiagnostics: VideoDiagnosticSnapshot | null = null;
   private readonly baselineStages = new Map<number, Set<string>>();
+  private streamStats: StreamStatsSnapshot = {
+    ...INITIAL_STREAM_STATS_SNAPSHOT,
+  };
 
   constructor(
     private readonly runtime: VerifiedMpvRuntime,
@@ -331,6 +339,10 @@ export class MpvController {
     const instance = await this.spawnAndConnect("initial");
     if (input) this.sendLoad(instance, input);
     this.replacementArmed = true;
+  }
+
+  getStreamStats(): StreamStatsSnapshot {
+    return { ...this.streamStats };
   }
 
   private async spawnAndConnect(reason: "initial" | "replacement") {
@@ -427,6 +439,11 @@ export class MpvController {
     this.stopPerformanceSampling(instance);
     instance.socket?.destroy();
     instance.socket = null;
+    this.streamStats = {
+      ...this.streamStats,
+      available: false,
+      updatedAt: Date.now(),
+    };
     this.removePendingCommands(instance.id);
     this.logger.write("mpv-process-exit", this.generation, {
       exitCode: instance.child.exitCode,
@@ -504,6 +521,13 @@ export class MpvController {
       typeof message.data === "boolean"
     ) {
       const eventGeneration = this.confirmedGeneration || this.generation;
+      this.streamStats = {
+        ...this.streamStats,
+        available: true,
+        cachePaused: message.data,
+        generation: eventGeneration,
+        updatedAt: Date.now(),
+      };
       this.logger.write("mpv-cache-state", eventGeneration, {
         accepted:
           decideGeneration(this.generation, eventGeneration) === "current",
@@ -533,6 +557,11 @@ export class MpvController {
       }
       this.logger.write("mpv-event", eventGeneration, details);
       if (message.event === "start-file") {
+        this.streamStats = {
+          ...INITIAL_STREAM_STATS_SNAPSHOT,
+          adapter: this.adapterSelection.adapter.description,
+          generation: eventGeneration,
+        };
         this.appliedGraphSignature = null;
         this.scalingDecision = {
           fallbackScaler: this.profile.fallbackScaler,
@@ -728,6 +757,14 @@ export class MpvController {
     if (pending.performanceSample) {
       const value = message.data;
       if (
+        result === "success" &&
+        pending.generation === this.generation &&
+        typeof value === "number" &&
+        Number.isFinite(value)
+      ) {
+        this.applyStreamPerformanceStat(property, value, pending.generation);
+      }
+      if (
         property === "playback-time" &&
         result === "success" &&
         typeof value === "number" &&
@@ -845,6 +882,20 @@ export class MpvController {
         snapshot.decoder = normalizedCode(selectedVideo.decoder);
       }
     }
+  }
+
+  private applyStreamPerformanceStat(
+    property: MpvDiagnosticProperty,
+    value: number,
+    generation: number,
+  ): void {
+    this.streamStats = applyStreamPerformanceSample(
+      this.streamStats,
+      property,
+      value,
+      generation,
+      Date.now(),
+    );
   }
 
   private refreshVideoDiagnostics(
@@ -1033,6 +1084,26 @@ export class MpvController {
   }
 
   private logVideoDiagnostics(snapshot: VideoDiagnosticSnapshot): void {
+    this.streamStats = {
+      ...this.streamStats,
+      adapter: this.adapterSelection.adapter.description,
+      available: true,
+      decoder: snapshot.decoder,
+      generation: this.generation,
+      hardwareDecoder: snapshot.hwdecCurrent,
+      outputHeight: snapshot.outputHeight,
+      outputWidth: snapshot.outputWidth,
+      sourceHeight: snapshot.sourceHeight,
+      sourceWidth: snapshot.sourceWidth,
+      updatedAt: Date.now(),
+      videoOutput:
+        snapshot.currentVo && snapshot.currentGpuContext
+          ? `${snapshot.currentVo}/${snapshot.currentGpuContext}`
+          : null,
+      vsrConfirmed: false,
+      vsrFilterAttached: snapshot.filterGraph.vsrFilterAttached,
+      vsrRequested: this.videoFilterGraph.vsrRequested,
+    };
     this.logger.write(
       "mpv-video-diagnostics",
       this.generation,
@@ -1313,6 +1384,7 @@ export class MpvController {
         "container-fps",
         "frame-drop-count",
         "decoder-frame-drop-count",
+        "demuxer-cache-duration",
         "display-fps",
         "estimated-display-fps",
         "estimated-vf-fps",

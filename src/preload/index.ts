@@ -13,6 +13,7 @@ import type {
   RapidProviderPlaybackResult,
 } from "../shared/provider";
 import type { OverlayAction, OverlayState } from "../shared/overlay";
+import type { StreamStatsState } from "../shared/stream-stats";
 
 const api: CoaxApi = Object.freeze({
   cycleTestChannel: (direction: TestChannelDirection) =>
@@ -30,6 +31,10 @@ const api: CoaxApi = Object.freeze({
     ipcRenderer.invoke(
       IPC_CHANNELS.getProviderState,
     ) as Promise<ProviderViewState>,
+  getStreamStatsState: () =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.getStreamStatsState,
+    ) as Promise<StreamStatsState>,
   onOverlayState: (listener: (state: OverlayState) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: OverlayState) =>
       listener(state);
@@ -45,6 +50,15 @@ const api: CoaxApi = Object.freeze({
     ipcRenderer.on(IPC_CHANNELS.providerStateChanged, handler);
     return () =>
       ipcRenderer.removeListener(IPC_CHANNELS.providerStateChanged, handler);
+  },
+  onStreamStatsState: (listener: (state: StreamStatsState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      state: StreamStatsState,
+    ) => listener(state);
+    ipcRenderer.on(IPC_CHANNELS.streamStatsStateChanged, handler);
+    return () =>
+      ipcRenderer.removeListener(IPC_CHANNELS.streamStatsStateChanged, handler);
   },
   playProviderChannel: (channelId: string) =>
     ipcRenderer.invoke(

@@ -3,6 +3,7 @@ import type { RuntimeVersions } from "../../shared/api";
 import type { ControllerNavigationAction } from "../../shared/controller-navigation";
 import { shouldApplyGeneration } from "../../shared/generation";
 import type { OverlayState } from "../../shared/overlay";
+import { Icon } from "./Icons";
 import { useControllerNavigation } from "./use-controller-navigation";
 import { ProviderBrowser } from "./ProviderBrowser";
 
@@ -28,21 +29,26 @@ export function App(): React.JSX.Element {
 
   if (versions?.slice6Acceptance || versions?.slice7Acceptance) {
     return (
-      <main className="shell-surface">
-        <p className="eyebrow">
-          M0b · {versions.slice7Acceptance ? "Slice 7" : "Slice 6"} · controlled
-          native run
-        </p>
-        <h1>
-          {versions.slice7Acceptance
-            ? "Sports motion benchmark"
-            : "Hardware playback benchmark"}
-        </h1>
-        <p>
-          The synthetic fixture and fixed profile are controlled by the native
-          acceptance harness. Development playback controls are disabled for
-          this run.
-        </p>
+      <main className="acceptance-surface">
+        <div className="brand" aria-label="Coax">
+          <span className="brand-mark" aria-hidden="true" />
+          <span>coax</span>
+        </div>
+        <section className="acceptance-card">
+          <p className="section-label">Controlled playback test</p>
+          <h1>
+            {versions.slice7Acceptance
+              ? "Sports motion benchmark"
+              : "Hardware playback benchmark"}
+          </h1>
+          <p>
+            The test is running with a fixed video profile. Playback controls
+            are temporarily unavailable.
+          </p>
+          <span className="test-status">
+            <span aria-hidden="true" /> Test in progress
+          </span>
+        </section>
       </main>
     );
   }
@@ -84,61 +90,80 @@ export function App(): React.JSX.Element {
 
   return (
     <main className="shell-surface">
-      <p className="eyebrow">M0b · Slice 5 · Xtream vertical slice</p>
-      <h1>Coax</h1>
-      <p>
-        Native playback is embedded with a separate interactive Electron
-        overlay.
-      </p>
-      <section aria-label="Private test stream controls">
-        <p>{testChannel}</p>
-        <div className="controls">
-          <button type="button" onClick={() => void cycleChannel("previous")}>
-            Previous
-          </button>
-          <button type="button" onClick={() => void cycleChannel("next")}>
-            Next
-          </button>
-          <button type="button" onClick={() => void runRapidPlaylistTest()}>
-            Run 30-change test
-          </button>
-          <button
-            type="button"
-            onClick={() => void window.coax.toggleFullscreen()}
-          >
-            Toggle fullscreen
-          </button>
-          <button
-            type="button"
-            onClick={() => void window.coax.requestOverlayAction("show")}
-          >
-            Show playback overlay
-          </button>
+      <header className="app-header">
+        <div className="brand" aria-label="Coax home">
+          <span className="brand-mark" aria-hidden="true" />
+          <span>coax</span>
         </div>
-        <p>
-          Overlay: {overlay?.visible ? "visible" : "hidden"}. Press Enter or F8
-          to open; Escape or Back returns focus to the shell.
-        </p>
-      </section>
-      <ProviderBrowser />
-      {versions ? (
-        <dl aria-label="Runtime versions">
-          <div>
-            <dt>Electron</dt>
-            <dd>{versions.electron}</dd>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => void window.coax.toggleFullscreen()}
+        >
+          <Icon name="expand" />
+          <span>Fullscreen</span>
+        </button>
+      </header>
+
+      <div className="shell-content">
+        <section className="welcome-copy">
+          <p className="section-label">Your television</p>
+          <h1>What do you want to watch?</h1>
+          <p>Choose a live channel and settle in.</p>
+        </section>
+
+        <ProviderBrowser />
+
+        <details className="developer-panel">
+          <summary>Playback diagnostics</summary>
+          <div className="developer-panel-content">
+            <div>
+              <p className="diagnostic-label">Test playlist</p>
+              <p>{testChannel}</p>
+            </div>
+            <div className="controls">
+              <button
+                type="button"
+                onClick={() => void cycleChannel("previous")}
+              >
+                Previous
+              </button>
+              <button type="button" onClick={() => void cycleChannel("next")}>
+                Next
+              </button>
+              <button type="button" onClick={() => void runRapidPlaylistTest()}>
+                Run switching test
+              </button>
+              <button
+                type="button"
+                onClick={() => void window.coax.requestOverlayAction("show")}
+              >
+                Show player controls
+              </button>
+            </div>
+            <p className="diagnostic-note">
+              Player controls are {overlay?.visible ? "open" : "closed"}. Press
+              Enter or F8 to open them; Escape closes them.
+            </p>
+            {versions && (
+              <dl aria-label="Runtime versions">
+                <div>
+                  <dt>Electron</dt>
+                  <dd>{versions.electron}</dd>
+                </div>
+                <div>
+                  <dt>Node</dt>
+                  <dd>{versions.node}</dd>
+                </div>
+                <div>
+                  <dt>Chromium</dt>
+                  <dd>{versions.chrome}</dd>
+                </div>
+              </dl>
+            )}
           </div>
-          <div>
-            <dt>Node</dt>
-            <dd>{versions.node}</dd>
-          </div>
-          <div>
-            <dt>Chromium</dt>
-            <dd>{versions.chrome}</dd>
-          </div>
-        </dl>
-      ) : (
-        <p>Reading runtime versions…</p>
-      )}
+        </details>
+      </div>
     </main>
   );
 }

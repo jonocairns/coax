@@ -13,6 +13,7 @@ export type MpvDiagnosticProperty =
   | "current-gpu-context"
   | "current-vo"
   | "decoder-frame-drop-count"
+  | "demuxer-cache-duration"
   | "display-fps"
   | "estimated-display-fps"
   | "estimated-vf-fps"
