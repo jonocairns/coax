@@ -30,6 +30,7 @@ export interface GenerationPlaybackTarget {
 
 export class XtreamProviderSession {
   private catalog: TrustedProviderCatalog | null = null;
+  private activeCredentials: XtreamCredentials | null = null;
 
   constructor(
     private readonly credentials: CredentialReader,
@@ -38,7 +39,9 @@ export class XtreamProviderSession {
   ) {}
 
   async refresh(): Promise<ProviderViewState> {
-    this.catalog = await this.data.refresh(await this.credentials.load());
+    const credentials = await this.credentials.load();
+    this.catalog = await this.data.refresh(credentials);
+    this.activeCredentials = credentials;
     return this.viewState();
   }
 
@@ -69,10 +72,9 @@ export class XtreamProviderSession {
     if (!channel) throw new Error("provider-channel-unavailable");
     const generation = this.playback.reserveGeneration();
     onReserved(generation);
-    const resolved = await this.data.resolve(
-      await this.credentials.load(),
-      channel,
-    );
+    const credentials =
+      this.activeCredentials ?? (await this.credentials.load());
+    const resolved = await this.data.resolve(credentials, channel);
     const accepted =
       this.playback.isCurrentGeneration(generation) &&
       this.playback.loadReserved(generation, {

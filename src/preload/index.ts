@@ -6,6 +6,7 @@ import {
   type RapidPlaylistTestResult,
   type RuntimeVersions,
   type TestChannelDirection,
+  type VideoViewport,
 } from "../shared/api";
 import type {
   ChannelPlaybackIntentResult,
@@ -83,6 +84,17 @@ const api: CoaxApi = Object.freeze({
       IPC_CHANNELS.setOverlayPointerCapture,
       capture,
     ) as Promise<void>,
+  setVideoViewport: (viewport: VideoViewport | null) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.setVideoViewport,
+      viewport,
+    ) as Promise<void>,
+  setVolume: (volume: number) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setVolume, volume) as Promise<OverlayState>,
+  stopPlayback: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.stopPlayback) as Promise<OverlayState>,
+  toggleMute: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.toggleMute) as Promise<OverlayState>,
   toggleFullscreen: () =>
     ipcRenderer.invoke(IPC_CHANNELS.toggleFullscreen) as Promise<boolean>,
 });

@@ -19,7 +19,11 @@ export const IPC_CHANNELS = {
   runRapidPlaylistTest: "coax:run-rapid-playlist-test",
   runRapidProviderTest: "coax:run-rapid-provider-test",
   setOverlayPointerCapture: "coax:set-overlay-pointer-capture",
+  setVideoViewport: "coax:set-video-viewport",
+  setVolume: "coax:set-volume",
+  stopPlayback: "coax:stop-playback",
   streamStatsStateChanged: "coax:stream-stats-state-changed",
+  toggleMute: "coax:toggle-mute",
   toggleFullscreen: "coax:toggle-fullscreen",
 } as const;
 
@@ -36,6 +40,13 @@ export interface RuntimeVersions {
 export interface PlaylistIntentResult {
   direction: TestChannelDirection;
   generation: number;
+}
+
+export interface VideoViewport {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
 }
 
 export interface RapidPlaylistTestResult {
@@ -64,5 +75,9 @@ export interface CoaxApi {
   runRapidPlaylistTest: () => Promise<RapidPlaylistTestResult>;
   runRapidProviderTest: () => Promise<RapidProviderPlaybackResult>;
   setOverlayPointerCapture: (capture: boolean) => Promise<void>;
+  setVideoViewport: (viewport: VideoViewport | null) => Promise<void>;
+  setVolume: (volume: number) => Promise<OverlayState>;
+  stopPlayback: () => Promise<OverlayState>;
+  toggleMute: () => Promise<OverlayState>;
   toggleFullscreen: () => Promise<boolean>;
 }

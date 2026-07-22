@@ -120,6 +120,26 @@ export function createPlaylistStepCommand(
   };
 }
 
+export function createSetAudioPropertyCommand(
+  property: "mute" | "volume",
+  value: boolean | number,
+  requestId: number,
+): MpvCommand {
+  if (property === "mute" && typeof value !== "boolean") {
+    throw new Error("invalid-mpv-mute-value");
+  }
+  if (
+    property === "volume" &&
+    (typeof value !== "number" || !Number.isFinite(value))
+  ) {
+    throw new Error("invalid-mpv-volume-value");
+  }
+  return {
+    command: ["set_property", property, value],
+    request_id: requestId,
+  };
+}
+
 export function createGetPropertyCommand(
   property: MpvDiagnosticProperty | "pid" | "playlist-pos",
   requestId: number,

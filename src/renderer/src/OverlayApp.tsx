@@ -6,9 +6,10 @@ import {
   type StreamStatsState,
 } from "../../shared/stream-stats";
 import { Icon } from "./Icons";
-import { useControllerNavigation } from "./use-controller-navigation";
 import { ProviderBrowser } from "./ProviderBrowser";
 import { StreamStatsPanel } from "./StreamStatsPanel";
+import { useControllerNavigation } from "./use-controller-navigation";
+import { VolumeControl } from "./VolumeControl";
 
 export function OverlayApp(): React.JSX.Element {
   const [state, setState] = useState<OverlayState>({
@@ -18,7 +19,11 @@ export function OverlayApp(): React.JSX.Element {
     snapshot: { ...INITIAL_STREAM_STATS_SNAPSHOT },
     visible: false,
   });
+  const [hasPlayback, setHasPlayback] = useState(false);
   const controls = useRef<Array<HTMLButtonElement | null>>([]);
+  const preview = useRef<HTMLButtonElement | null>(null);
+  const browsing = state.visible && state.focused && state.view === "browse";
+  const showingControls = state.visible && state.view === "controls";
 
   useEffect(() => {
     void window.coax.getOverlayState().then(setState);
@@ -39,10 +44,42 @@ export function OverlayApp(): React.JSX.Element {
   }, [streamStats.visible]);
 
   useEffect(() => {
-    if (state.visible && state.focused) controls.current[1]?.focus();
-  }, [state.focused, state.visible]);
+    if (showingControls && state.focused) controls.current[1]?.focus();
+  }, [showingControls, state.focused]);
 
-  function moveFocus(delta: number): void {
+  useEffect(() => {
+    if (!state.channelId) setHasPlayback(false);
+    else if (state.phase === "playing") setHasPlayback(true);
+  }, [state.channelId, state.phase]);
+
+  useEffect(() => {
+    const element = preview.current;
+    if (!browsing || !element) return;
+    let animationFrame = 0;
+    const publishBounds = (): void => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(() => {
+        const bounds = element.getBoundingClientRect();
+        void window.coax.setVideoViewport({
+          height: Math.round(bounds.height),
+          width: Math.round(bounds.width),
+          x: Math.round(bounds.x),
+          y: Math.round(bounds.y),
+        });
+      });
+    };
+    const observer = new ResizeObserver(publishBounds);
+    observer.observe(element);
+    publishBounds();
+    window.addEventListener("resize", publishBounds);
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+      window.removeEventListener("resize", publishBounds);
+    };
+  }, [browsing]);
+
+  function moveControlFocus(delta: number): void {
     const available = controls.current.filter(
       (control): control is HTMLButtonElement => control !== null,
     );
@@ -56,6 +93,7 @@ export function OverlayApp(): React.JSX.Element {
   }
 
   function handleControllerAction(action: ControllerNavigationAction): void {
+    if (!showingControls) return;
     if (action === "back") {
       void window.coax.requestOverlayAction("hide");
     } else if (action === "accept") {
@@ -65,94 +103,191 @@ export function OverlayApp(): React.JSX.Element {
         controls.current[1]?.focus();
       }
     } else {
-      moveFocus(action === "left" || action === "up" ? -1 : 1);
+      moveControlFocus(action === "left" || action === "up" ? -1 : 1);
     }
   }
 
   useControllerNavigation(handleControllerAction);
 
-  function handleKeyDown(event: React.KeyboardEvent): void {
-    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-      event.preventDefault();
-      moveFocus(-1);
-    } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      event.preventDefault();
-      moveFocus(1);
-    }
-  }
-
   return (
-    <main className="overlay-surface" onKeyDown={handleKeyDown}>
-      <section
-        aria-label="Playback overlay"
-        className="overlay-panel"
-        data-overlay-interactive
-        data-focused={state.focused || undefined}
+    <>
+      <main
+        className="browse-surface"
+        hidden={!browsing}
         onPointerEnter={() => void window.coax.setOverlayPointerCapture(true)}
         onPointerLeave={() => void window.coax.setOverlayPointerCapture(false)}
       >
-        {streamStats.visible && (
-          <StreamStatsPanel snapshot={streamStats.snapshot} />
-        )}
-        {(!streamStats.visible || state.focused) && (
-          <div className="overlay-main">
-            <div className="overlay-copy">
-              <div className="overlay-kicker-row">
-                <p className="overlay-kicker">Now playing</p>
-                <p
-                  className={`overlay-feedback phase-${state.phase}`}
-                  role="status"
-                >
-                  <span aria-hidden="true" />
-                  {state.feedback}
-                </p>
+        <section className="browse-catalog" aria-label="Channel browser">
+          <ProviderBrowser
+            activeChannelId={state.channelId}
+            compact
+            playbackFeedback={state.feedback}
+            playbackPhase={state.phase}
+          />
+        </section>
+
+        <aside className="browse-player" aria-label="Live preview">
+          <button
+            aria-label={
+              hasPlayback
+                ? `Watch ${state.now} fullscreen`
+                : "Choose a channel to start playback"
+            }
+            className={`video-preview${hasPlayback ? " has-video" : ""}`}
+            disabled={!hasPlayback}
+            onClick={() => void window.coax.requestOverlayAction("fullscreen")}
+            ref={preview}
+            type="button"
+          >
+            {!hasPlayback && (
+              <span className="preview-empty">
+                <span className="empty-state-icon">
+                  <Icon name="channels" />
+                </span>
+                <strong>
+                  {state.channelId
+                    ? "Starting your channel…"
+                    : "Your live preview"}
+                </strong>
+                <small>
+                  {state.channelId
+                    ? "Playback will appear here when it is ready."
+                    : "Choose a channel to start watching."}
+                </small>
+              </span>
+            )}
+            {hasPlayback && (
+              <span className="preview-watch">
+                <Icon name="expand" />
+                Watch fullscreen
+              </span>
+            )}
+          </button>
+
+          <section className="browse-now-playing">
+            <div className="browse-now-heading">
+              <div>
+                <p className="section-label">Now playing</p>
+                <h1>{state.channelId ? state.now : "Nothing selected"}</h1>
               </div>
-              <h1>{state.now}</h1>
-              <p className="overlay-next">
-                <span>Up next</span>
-                {state.next}
+              <p
+                className={`overlay-feedback phase-${state.phase}`}
+                role="status"
+              >
+                <span aria-hidden="true" />
+                {state.feedback}
               </p>
             </div>
-            <div className="overlay-controls" aria-label="Playback controls">
+            <VolumeControl state={state} />
+            <div className="browse-playback-actions">
               <button
-                aria-label="Previous channel"
-                ref={(element) => {
-                  controls.current[0] = element;
-                }}
+                className="watch-fullscreen-button"
+                disabled={!hasPlayback}
+                onClick={() =>
+                  void window.coax.requestOverlayAction("fullscreen")
+                }
                 type="button"
-                onClick={() => void window.coax.cycleTestChannel("previous")}
               >
-                <Icon name="arrow-left" />
-                <span>Previous</span>
+                <Icon name="expand" />
+                Watch fullscreen
               </button>
               <button
-                aria-label="Next channel"
-                className="primary-control"
-                ref={(element) => {
-                  controls.current[1] = element;
-                }}
+                aria-label="Stop playback"
+                className="stop-playback-button"
+                disabled={!state.channelId}
+                onClick={() => void window.coax.stopPlayback()}
+                title="Stop playback"
                 type="button"
-                onClick={() => void window.coax.cycleTestChannel("next")}
               >
-                <Icon name="arrow-right" />
-                <span>Next</span>
-              </button>
-              <button
-                aria-label="Close controls"
-                ref={(element) => {
-                  controls.current[2] = element;
-                }}
-                type="button"
-                onClick={() => void window.coax.requestOverlayAction("hide")}
-              >
-                <Icon name="close" />
-                <span>Close</span>
+                <Icon name="stop" />
               </button>
             </div>
-          </div>
-        )}
-        {state.focused && <ProviderBrowser compact />}
-      </section>
-    </main>
+          </section>
+        </aside>
+      </main>
+
+      <main
+        className="overlay-surface"
+        data-fading={state.fading || undefined}
+        hidden={!showingControls}
+      >
+        <section
+          aria-label="Playback overlay"
+          className="overlay-panel"
+          data-overlay-interactive
+          data-focused={state.focused || undefined}
+          onPointerEnter={() => void window.coax.setOverlayPointerCapture(true)}
+          onPointerLeave={() =>
+            void window.coax.setOverlayPointerCapture(false)
+          }
+        >
+          {streamStats.visible && (
+            <StreamStatsPanel snapshot={streamStats.snapshot} />
+          )}
+          {(!streamStats.visible || state.focused) && (
+            <div className="overlay-main">
+              <div className="overlay-copy">
+                <div className="overlay-kicker-row">
+                  <p className="overlay-kicker">Now playing</p>
+                  <p
+                    className={`overlay-feedback phase-${state.phase}`}
+                    role="status"
+                  >
+                    <span aria-hidden="true" />
+                    {state.feedback}
+                  </p>
+                </div>
+                <h1>{state.now}</h1>
+              </div>
+              <div className="fullscreen-actions">
+                <VolumeControl compact state={state} />
+                <div
+                  className="overlay-controls"
+                  aria-label="Playback controls"
+                >
+                  <button
+                    aria-label="Exit fullscreen"
+                    ref={(element) => {
+                      controls.current[0] = element;
+                    }}
+                    type="button"
+                    onClick={() =>
+                      void window.coax.requestOverlayAction("browse")
+                    }
+                  >
+                    <Icon name="collapse" />
+                    <span>Exit fullscreen</span>
+                  </button>
+                  <button
+                    aria-label="Next channel"
+                    className="primary-control"
+                    ref={(element) => {
+                      controls.current[1] = element;
+                    }}
+                    type="button"
+                    onClick={() => void window.coax.cycleTestChannel("next")}
+                  >
+                    <Icon name="arrow-right" />
+                    <span>Next</span>
+                  </button>
+                  <button
+                    aria-label="Stop playback"
+                    className="stop-control"
+                    ref={(element) => {
+                      controls.current[2] = element;
+                    }}
+                    type="button"
+                    onClick={() => void window.coax.stopPlayback()}
+                  >
+                    <Icon name="stop" />
+                    <span>Stop</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+      </main>
+    </>
   );
 }

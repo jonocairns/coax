@@ -9,6 +9,7 @@ const root = document.getElementById("root");
 if (!root) throw new Error("Renderer root element is missing");
 
 const surface = new URLSearchParams(window.location.search).get("surface");
+document.documentElement.classList.add("dark");
 document.documentElement.dataset.surface =
   surface === "overlay" ? "overlay" : "shell";
 

@@ -1,13 +1,72 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { filterChannels } from "../../shared/channel-filter";
-import type { ProviderViewState } from "../../shared/provider";
+import type { OverlayFeedbackPhase } from "../../shared/overlay";
+import type {
+  ProviderChannelView,
+  ProviderViewState,
+} from "../../shared/provider";
 import { Icon } from "./Icons";
 
-export function ProviderBrowser({
-  compact = false,
-}: {
+interface ProviderBrowserProps {
+  activeChannelId?: string | null;
   compact?: boolean;
+  playbackFeedback?: string;
+  playbackPhase?: OverlayFeedbackPhase;
+}
+
+const ChannelButton = memo(function ChannelButton({
+  active,
+  categoryName,
+  channel,
+  pending,
+  searching,
+  onPlay,
+}: {
+  active: boolean;
+  categoryName: string | undefined;
+  channel: ProviderChannelView;
+  onPlay: (channelId: string, name: string) => void;
+  pending: boolean;
+  searching: boolean;
 }): React.JSX.Element {
+  return (
+    <button
+      aria-current={active ? "true" : undefined}
+      className={pending ? "is-pending" : undefined}
+      onClick={() => onPlay(channel.id, channel.name)}
+      type="button"
+    >
+      <span className="channel-mark" aria-hidden="true">
+        {channel.name.slice(0, 1).toLocaleUpperCase()}
+      </span>
+      <span className="channel-copy">
+        <span className="channel-name">{channel.name}</span>
+        {searching && <small>{categoryName}</small>}
+      </span>
+      <small className="transport-label">
+        {channel.transport === "hls" ? "HLS" : "Live"}
+      </small>
+      <span className="channel-play" aria-hidden="true">
+        <Icon name="play" />
+      </span>
+    </button>
+  );
+});
+
+function ProviderBrowserComponent({
+  activeChannelId: controlledActiveChannelId,
+  compact = false,
+  playbackFeedback,
+  playbackPhase,
+}: ProviderBrowserProps): React.JSX.Element {
   const browserClassName = compact
     ? "provider-browser compact"
     : "provider-browser";
@@ -16,10 +75,24 @@ export function ProviderBrowser({
   });
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
-  const [pendingChannelId, setPendingChannelId] = useState<string | null>(null);
+  const [localActiveChannelId, setLocalActiveChannelId] = useState<
+    string | null
+  >(null);
+  const [localPendingChannelId, setLocalPendingChannelId] = useState<
+    string | null
+  >(null);
   const [feedback, setFeedback] = useState("Select a channel to play");
+  const playbackRequest = useRef(0);
   const deferredSearchQuery = useDeferredValue(searchQuery);
+  const activeChannelId =
+    controlledActiveChannelId === undefined
+      ? localActiveChannelId
+      : controlledActiveChannelId;
+  const pendingChannelId =
+    localPendingChannelId ??
+    (playbackPhase === "zapping" || playbackPhase === "recovering"
+      ? activeChannelId
+      : null);
 
   useEffect(() => {
     void window.coax.getProviderState().then(setProvider);
@@ -56,6 +129,37 @@ export function ProviderBrowser({
     [categoryDetails],
   );
 
+  const activeChannelName = useMemo(
+    () =>
+      provider.phase === "ready"
+        ? provider.channels.find((channel) => channel.id === activeChannelId)
+            ?.name
+        : undefined,
+    [activeChannelId, provider],
+  );
+
+  useEffect(() => {
+    if (controlledActiveChannelId === null && playbackPhase === "ready") {
+      playbackRequest.current += 1;
+      setLocalPendingChannelId(null);
+      return;
+    }
+    if (!activeChannelName || !playbackPhase) return;
+    if (playbackPhase === "playing") {
+      setLocalPendingChannelId(null);
+      setFeedback(`${activeChannelName} is playing`);
+    } else if (playbackPhase === "recovering") {
+      setFeedback(playbackFeedback ?? `Reconnecting ${activeChannelName}`);
+    } else if (playbackPhase === "zapping") {
+      setFeedback(`Tuning ${activeChannelName}…`);
+    }
+  }, [
+    activeChannelName,
+    controlledActiveChannelId,
+    playbackFeedback,
+    playbackPhase,
+  ]);
+
   const normalizedSearchQuery = deferredSearchQuery.trim().toLocaleLowerCase();
   const isSearching = normalizedSearchQuery.length > 0;
   const channels = useMemo(
@@ -70,21 +174,30 @@ export function ProviderBrowser({
     [normalizedSearchQuery, provider, selectedCategory],
   );
 
-  async function play(channelId: string, name: string): Promise<void> {
-    setPendingChannelId(channelId);
+  const play = useCallback(async (channelId: string, name: string) => {
+    const request = ++playbackRequest.current;
+    setLocalPendingChannelId(channelId);
     setFeedback(`Requesting ${name}`);
     try {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      if (request !== playbackRequest.current) return;
       const result = await window.coax.playProviderChannel(channelId);
-      if (result.accepted) setActiveChannelId(channelId);
+      if (request !== playbackRequest.current) return;
+      if (result.accepted) setLocalActiveChannelId(channelId);
       setFeedback(
-        result.accepted ? `${name} is playing` : "A newer channel request won",
+        result.accepted ? `Tuning ${name}…` : "A newer channel request won",
       );
     } catch {
+      if (request !== playbackRequest.current) return;
       setFeedback("Channel playback unavailable");
     } finally {
-      setPendingChannelId(null);
+      if (request === playbackRequest.current) {
+        setLocalPendingChannelId(null);
+      }
     }
-  }
+  }, []);
 
   async function runRapidProviderTest(): Promise<void> {
     setFeedback("Running 30 channel-ID changes");
@@ -131,16 +244,18 @@ export function ProviderBrowser({
 
   return (
     <section className={browserClassName}>
-      <div className="provider-heading">
-        <div>
-          <p className="section-label">Browse</p>
-          <h2>Live TV</h2>
+      {!compact && (
+        <div className="provider-heading">
+          <div>
+            <p className="section-label">Browse</p>
+            <h2>Live TV</h2>
+          </div>
+          <span className="channel-count">
+            {provider.counts.channelsNormalized}{" "}
+            {provider.counts.channelsNormalized === 1 ? "channel" : "channels"}
+          </span>
         </div>
-        <span className="channel-count">
-          {provider.counts.channelsNormalized}{" "}
-          {provider.counts.channelsNormalized === 1 ? "channel" : "channels"}
-        </span>
-      </div>
+      )}
 
       <label className="channel-search">
         <Icon name="search" />
@@ -210,33 +325,15 @@ export function ProviderBrowser({
           </div>
           <div className="channel-list" aria-label="Live channels">
             {channels.map((channel) => (
-              <button
-                aria-current={
-                  activeChannelId === channel.id ? "true" : undefined
-                }
-                className={
-                  pendingChannelId === channel.id ? "is-pending" : undefined
-                }
+              <ChannelButton
+                active={activeChannelId === channel.id}
+                categoryName={categoryNames.get(channel.categoryId)}
+                channel={channel}
                 key={channel.id}
-                onClick={() => void play(channel.id, channel.name)}
-                type="button"
-              >
-                <span className="channel-mark" aria-hidden="true">
-                  {channel.name.slice(0, 1).toLocaleUpperCase()}
-                </span>
-                <span className="channel-copy">
-                  <span className="channel-name">{channel.name}</span>
-                  {isSearching && (
-                    <small>{categoryNames.get(channel.categoryId)}</small>
-                  )}
-                </span>
-                <small className="transport-label">
-                  {channel.transport === "hls" ? "HLS" : "Live"}
-                </small>
-                <span className="channel-play" aria-hidden="true">
-                  <Icon name="play" />
-                </span>
-              </button>
+                onPlay={play}
+                pending={pendingChannelId === channel.id}
+                searching={isSearching}
+              />
             ))}
             {channels.length === 0 && (
               <div className="no-channel-results" role="status">
@@ -275,3 +372,5 @@ export function ProviderBrowser({
     </section>
   );
 }
+
+export const ProviderBrowser = memo(ProviderBrowserComponent);

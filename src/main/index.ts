@@ -15,6 +15,7 @@ import {
   type PlaylistIntentResult,
   type RapidPlaylistTestResult,
   type RuntimeVersions,
+  type VideoViewport,
 } from "../shared/api";
 import {
   INTERNAL_CHANNEL_ID_PATTERN,
@@ -29,6 +30,7 @@ import {
   type OverlayAction,
   type OverlayState,
   type OverlayStateEvent,
+  type OverlayView,
 } from "../shared/overlay";
 import {
   INITIAL_STREAM_STATS_SNAPSHOT,
@@ -67,6 +69,7 @@ import {
   presentationState,
   type GeometryReason,
 } from "./window-lifecycle";
+import { resolveVideoViewportBounds } from "./video-viewport";
 import {
   createMainWindowOptions,
   createOverlayWindowOptions,
@@ -91,7 +94,14 @@ let shutdownComplete = false;
 const geometryTimers = new Map<GeometryReason, ReturnType<typeof setTimeout>>();
 let overlayState: OverlayState = { ...INITIAL_OVERLAY_STATE };
 let overlayAutoHideTimer: ReturnType<typeof setTimeout> | null = null;
+let overlayFadeTimer: ReturnType<typeof setTimeout> | null = null;
+let pointerActivityInterval: ReturnType<typeof setInterval> | null = null;
 let streamStatsVisible = false;
+let videoViewport: VideoViewport | null = null;
+
+const OVERLAY_FADE_DURATION_MS = 220;
+const OVERLAY_POINTER_IDLE_MS = 2_400;
+const POINTER_ACTIVITY_POLL_MS = 100;
 
 function runtimeVersions(): RuntimeVersions {
   return {
@@ -157,6 +167,17 @@ function publishStreamStatsState(): void {
 function setProviderState(state: ProviderViewState): void {
   providerState = state;
   publishProviderState();
+  if (
+    state.phase === "ready" &&
+    process.env.COAX_SLICE3_ACCEPTANCE !== "1" &&
+    process.env.COAX_SLICE4_ACCEPTANCE !== "1" &&
+    process.env.COAX_SLICE5_ACCEPTANCE !== "1" &&
+    process.env.COAX_SLICE6_ACCEPTANCE !== "1" &&
+    process.env.COAX_SLICE7_ACCEPTANCE !== "1" &&
+    process.env.COAX_SLICE8_ACCEPTANCE !== "1"
+  ) {
+    showOverlay(true, "provider-ready", "browse");
+  }
 }
 
 function providerFailure(error: unknown): {
@@ -194,12 +215,18 @@ function transitionOverlayState(event: OverlayStateEvent): void {
 function clearOverlayAutoHide(): void {
   if (overlayAutoHideTimer) clearTimeout(overlayAutoHideTimer);
   overlayAutoHideTimer = null;
+  if (overlayFadeTimer) clearTimeout(overlayFadeTimer);
+  overlayFadeTimer = null;
 }
 
-function hideOverlay(reason: string, returnFocus: boolean): void {
+function hideOverlay(
+  reason: string,
+  returnFocus: boolean,
+  view: OverlayView = overlayState.view,
+): void {
   clearOverlayAutoHide();
   const wasFocused = overlayState.focused;
-  transitionOverlayState({ type: "hide" });
+  transitionOverlayState({ type: "hide", view });
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     if (streamStatsVisible) {
       overlayWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -224,13 +251,17 @@ function hideOverlay(reason: string, returnFocus: boolean): void {
   }
 }
 
-function showOverlay(focus: boolean, reason: string): void {
+function showOverlay(
+  focus: boolean,
+  reason: string,
+  view: OverlayView = overlayState.view,
+): void {
   const shell = mainWindow;
   if (!shell || shell.isDestroyed()) return;
   clearOverlayAutoHide();
   const wasFocused = overlayState.visible && overlayState.focused;
   const focusOverlay = focus || (overlayState.visible && overlayState.focused);
-  transitionOverlayState({ focus: focusOverlay, type: "show" });
+  transitionOverlayState({ focus: focusOverlay, type: "show", view });
   alignNativeLayers(shell);
   const overlay = overlayWindow;
   if (!overlay || overlay.isDestroyed()) return;
@@ -260,27 +291,140 @@ function showOverlay(focus: boolean, reason: string): void {
   });
 }
 
-function scheduleFeedbackAutoHide(): void {
+function beginOverlayFade(reason: string): void {
+  clearOverlayAutoHide();
+  if (
+    !overlayState.visible ||
+    overlayState.focused ||
+    overlayState.view !== "controls" ||
+    streamStatsVisible
+  ) {
+    return;
+  }
+  transitionOverlayState({ type: "fade" });
+  overlayFadeTimer = setTimeout(() => {
+    overlayFadeTimer = null;
+    if (overlayState.fading) hideOverlay(reason, false, "controls");
+  }, OVERLAY_FADE_DURATION_MS);
+}
+
+function scheduleFeedbackAutoHide(
+  delayMilliseconds = 3_500,
+  reason = "feedback-timeout",
+): void {
   clearOverlayAutoHide();
   overlayAutoHideTimer = setTimeout(() => {
     overlayAutoHideTimer = null;
-    if (overlayState.visible && !overlayState.focused) {
-      hideOverlay("feedback-timeout", false);
+    beginOverlayFade(reason);
+  }, delayMilliseconds);
+}
+
+function isUiAcceptanceRun(): boolean {
+  return [3, 4, 5, 6, 7, 8].some(
+    (slice) => process.env[`COAX_SLICE${slice}_ACCEPTANCE`] === "1",
+  );
+}
+
+function startPointerActivityMonitoring(): void {
+  if (isUiAcceptanceRun() || pointerActivityInterval) return;
+  let previous = screen.getCursorScreenPoint();
+  pointerActivityInterval = setInterval(() => {
+    const current = screen.getCursorScreenPoint();
+    const moved =
+      Math.abs(current.x - previous.x) + Math.abs(current.y - previous.y) >= 2;
+    previous = current;
+    if (!moved || !videoPlaybackReady || shutdownStarted) return;
+
+    const shell = mainWindow;
+    if (
+      !shell ||
+      shell.isDestroyed() ||
+      !shell.isVisible() ||
+      shell.isMinimized()
+    ) {
+      return;
     }
-  }, 3_500);
+    const overlayFocused = overlayWindow?.isFocused() ?? false;
+    if (!shell.isFocused() && !overlayFocused) return;
+    const bounds = shell.getContentBounds();
+    if (
+      current.x < bounds.x ||
+      current.y < bounds.y ||
+      current.x >= bounds.x + bounds.width ||
+      current.y >= bounds.y + bounds.height
+    ) {
+      return;
+    }
+    if (overlayState.visible && overlayState.view === "browse") return;
+
+    if (!overlayState.visible || overlayState.fading) {
+      showOverlay(false, "pointer-activity", "controls");
+    }
+    scheduleFeedbackAutoHide(OVERLAY_POINTER_IDLE_MS, "pointer-inactivity");
+  }, POINTER_ACTIVITY_POLL_MS);
+}
+
+function stopPointerActivityMonitoring(): void {
+  if (pointerActivityInterval) clearInterval(pointerActivityInterval);
+  pointerActivityInterval = null;
 }
 
 function applyOverlayAction(action: OverlayAction): OverlayState {
-  if (action === "hide") {
-    hideOverlay("renderer-back", true);
+  if (action === "browse") {
+    showOverlay(true, "renderer-browse", "browse");
+  } else if (action === "fullscreen") {
+    videoViewport = null;
+    // Expand the existing native player while the browser still covers it so
+    // revealing fullscreen playback never looks like a stream handoff.
+    alignNativeLayers(currentWindow());
+    hideOverlay("renderer-fullscreen", true, "controls");
+  } else if (action === "hide") {
+    if (overlayState.view === "browse") videoViewport = null;
+    hideOverlay("renderer-back", true, "controls");
   } else if (action === "show") {
-    showOverlay(true, "renderer-show");
+    showOverlay(true, "renderer-show", "controls");
   } else if (overlayState.visible) {
-    hideOverlay("renderer-toggle", true);
+    if (overlayState.view === "browse") videoViewport = null;
+    hideOverlay("renderer-toggle", true, "controls");
   } else {
-    showOverlay(true, "renderer-toggle");
+    showOverlay(true, "renderer-toggle", "controls");
+  }
+  const window = currentWindow();
+  alignNativeLayers(window);
+  if (action === "fullscreen" || videoViewport === null) {
+    scheduleGeometrySynchronization(window, "resize");
   }
   return overlayState;
+}
+
+function applyAudioState(volume: number, muted: boolean): OverlayState {
+  transitionOverlayState({ muted, type: "audio", volume });
+  return overlayState;
+}
+
+function setVideoPreviewViewport(viewport: VideoViewport | null): void {
+  if (viewport === null) {
+    videoViewport = null;
+  } else {
+    const values = [viewport.x, viewport.y, viewport.width, viewport.height];
+    if (
+      values.some((value) => !Number.isFinite(value)) ||
+      viewport.x < 0 ||
+      viewport.y < 0 ||
+      viewport.width < 160 ||
+      viewport.height < 90
+    ) {
+      throw new Error("invalid-video-viewport");
+    }
+    const bounds = currentWindow().getContentBounds();
+    videoViewport = {
+      height: Math.min(Math.round(viewport.height), bounds.height),
+      width: Math.min(Math.round(viewport.width), bounds.width),
+      x: Math.min(Math.round(viewport.x), bounds.width - 160),
+      y: Math.min(Math.round(viewport.y), bounds.height - 90),
+    };
+  }
+  scheduleGeometrySynchronization(currentWindow(), "resize");
 }
 
 function setStreamStatsVisible(visible: boolean): void {
@@ -320,6 +464,7 @@ function requestPlaylistStep(
 
 function providerZapFeedback(channelId: string, generation: number): void {
   transitionOverlayState({
+    channelId,
     channelName: providerSession?.channelName(channelId) ?? "Live channel",
     generation,
     type: "channel-zap",
@@ -444,7 +589,13 @@ function registerIpcHandlers(): void {
     (event, action: unknown): OverlayState => {
       if (!isKnownRenderer(event.sender.id))
         throw new Error("untrusted-renderer");
-      if (action !== "hide" && action !== "show" && action !== "toggle") {
+      if (
+        action !== "browse" &&
+        action !== "fullscreen" &&
+        action !== "hide" &&
+        action !== "show" &&
+        action !== "toggle"
+      ) {
         throw new Error("invalid-overlay-action");
       }
       return applyOverlayAction(action);
@@ -462,6 +613,54 @@ function registerIpcHandlers(): void {
       setOverlayPointerCapture(capture);
     },
   );
+  ipcMain.handle(
+    IPC_CHANNELS.setVideoViewport,
+    (event, viewport: unknown): void => {
+      if (event.sender.id !== overlayWindow?.webContents.id) {
+        throw new Error("untrusted-overlay-renderer");
+      }
+      if (
+        viewport !== null &&
+        (typeof viewport !== "object" || Array.isArray(viewport))
+      ) {
+        throw new Error("invalid-video-viewport");
+      }
+      setVideoPreviewViewport(viewport as VideoViewport | null);
+    },
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.setVolume,
+    (event, volume: unknown): OverlayState => {
+      if (!isKnownRenderer(event.sender.id))
+        throw new Error("untrusted-renderer");
+      if (typeof volume !== "number" || !Number.isFinite(volume)) {
+        throw new Error("invalid-volume");
+      }
+      const normalized = Math.min(100, Math.max(0, Math.round(volume)));
+      mpvController?.setVolume(normalized);
+      return applyAudioState(normalized, overlayState.muted);
+    },
+  );
+  ipcMain.handle(IPC_CHANNELS.stopPlayback, (event): OverlayState => {
+    if (!isKnownRenderer(event.sender.id))
+      throw new Error("untrusted-renderer");
+    const controller = mpvController;
+    if (!controller) throw new Error("playback-not-ready");
+    const generation = controller.stopPlayback();
+    videoPlaybackReady = false;
+    videoViewport = null;
+    videoWindow?.hide();
+    transitionOverlayState({ generation, type: "stopped" });
+    showOverlay(true, "playback-stopped", "browse");
+    return overlayState;
+  });
+  ipcMain.handle(IPC_CHANNELS.toggleMute, (event): OverlayState => {
+    if (!isKnownRenderer(event.sender.id))
+      throw new Error("untrusted-renderer");
+    const muted = !overlayState.muted;
+    mpvController?.setMuted(muted);
+    return applyAudioState(overlayState.volume, muted);
+  });
   ipcMain.handle(
     IPC_CHANNELS.cycleTestChannel,
     (event, direction: unknown): PlaylistIntentResult => {
@@ -636,16 +835,17 @@ function recordSettledGeometry(
   if (!decideGeometrySynchronization(reason, flags).record) return;
   const bounds = window.getContentBounds();
   alignNativeLayers(window, bounds);
-  const display = screen.getDisplayMatching(bounds);
+  const playbackBounds = resolveVideoViewportBounds(bounds, videoViewport);
+  const display = screen.getDisplayMatching(playbackBounds);
   mpvController?.recordWindowGeometry({
     displayId: display.id,
-    height: bounds.height,
+    height: playbackBounds.height,
     reason,
     scaleFactor: display.scaleFactor,
     state: presentationState(flags),
-    width: bounds.width,
-    x: bounds.x,
-    y: bounds.y,
+    width: playbackBounds.width,
+    x: playbackBounds.x,
+    y: playbackBounds.y,
   });
   playbackLogger?.write(
     "overlay-geometry-synchronized",
@@ -670,7 +870,7 @@ function alignNativeLayers(
   const host = videoWindow;
   if (!window.isVisible() || window.isMinimized()) return;
   if (host && !host.isDestroyed() && videoPlaybackReady) {
-    host.setBounds(bounds, false);
+    host.setBounds(resolveVideoViewportBounds(bounds, videoViewport), false);
     if (!host.isVisible()) host.showInactive();
   }
   const overlay = overlayWindow;
@@ -731,6 +931,17 @@ function attachWindowLifecycle(window: BrowserWindow): void {
     overlayWindow?.hide();
   });
   window.webContents.on("before-input-event", (event, input) => {
+    if (
+      input.type === "keyDown" &&
+      input.key === "Escape" &&
+      !input.isAutoRepeat &&
+      !overlayState.visible &&
+      videoPlaybackReady
+    ) {
+      event.preventDefault();
+      applyOverlayAction("browse");
+      return;
+    }
     if (
       input.type === "keyDown" &&
       input.key === "F11" &&
@@ -836,7 +1047,11 @@ function createOverlayWindow(parent: BrowserWindow): BrowserWindow {
     if (input.type !== "keyDown" || input.isAutoRepeat) return;
     if (input.key === "Escape") {
       event.preventDefault();
-      hideOverlay("keyboard-back", true);
+      if (overlayState.view === "browse") {
+        applyOverlayAction("fullscreen");
+      } else {
+        hideOverlay("keyboard-back", true);
+      }
     } else if (input.key === "F8") {
       event.preventDefault();
       applyOverlayAction("toggle");
@@ -943,6 +1158,12 @@ function handleMpvPlaybackStatus(event: MpvPlaybackStatusEvent): void {
     type: "recovering",
   });
   showOverlay(false, `recovery-${event.reason}`);
+}
+
+function restoreOverlayAfterMpvStacking(): void {
+  const shell = mainWindow;
+  if (!shell || shell.isDestroyed()) return;
+  alignNativeLayers(shell);
 }
 
 async function startM0Playback(
@@ -1144,6 +1365,7 @@ async function startM0Playback(
       deinterlacePolicy,
       sportsFixture,
       handleMpvPlaybackStatus,
+      restoreOverlayAfterMpvStacking,
     );
     await mpvController.start(input ?? undefined);
     videoPlaybackReady = input !== null;
@@ -1210,6 +1432,7 @@ void app.whenReady().then(() => {
   const nativeVideoHost = videoWindow;
   if (!nativeVideoHost) throw new Error("native-video-host-unavailable");
   playbackStartup = startM0Playback(window, nativeVideoHost);
+  startPointerActivityMonitoring();
 
   powerMonitor.on("resume", () => {
     const current = mainWindow;
@@ -1264,7 +1487,11 @@ app.on("before-quit", (event) => {
   }
 });
 
-app.on("will-quit", () => globalShortcut.unregisterAll());
+app.on("will-quit", () => {
+  stopPointerActivityMonitoring();
+  clearOverlayAutoHide();
+  globalShortcut.unregisterAll();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

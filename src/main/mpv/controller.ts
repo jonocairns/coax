@@ -9,6 +9,7 @@ import {
   createMpvPipeName,
   createObservePropertyCommand,
   createPlaylistStepCommand,
+  createSetAudioPropertyCommand,
   createVideoFilterCommand,
   serializeMpvCommand,
   type MpvDiagnosticProperty,
@@ -66,6 +67,8 @@ type TrackedCommandKind =
   | "heartbeat"
   | "loadfile"
   | "observe-paused-for-cache"
+  | "audio-control"
+  | "playback-control"
   | "playlist-position"
   | "playlist-step"
   | "video-filter";
@@ -281,6 +284,7 @@ export class MpvController {
   private shutdownPromise: Promise<void> | null = null;
   private shuttingDown = false;
   private stackingSynchronizationInFlight = false;
+  private stackingSynchronizationPending: OwnedMpvInstance | null = null;
   private diagnosticSequence = 0;
   private graphRevision = 0;
   private filterReconfigDeadline = 0;
@@ -306,6 +310,8 @@ export class MpvController {
   private streamStats: StreamStatsSnapshot = {
     ...INITIAL_STREAM_STATS_SNAPSHOT,
   };
+  private muted = false;
+  private volume = 100;
 
   constructor(
     private readonly runtime: VerifiedMpvRuntime,
@@ -319,6 +325,7 @@ export class MpvController {
     private readonly onPlaybackStatus: (
       event: MpvPlaybackStatusEvent,
     ) => void = () => undefined,
+    private readonly onWindowStackingSynchronized: () => void = () => undefined,
   ) {}
 
   async start(input?: MpvPlaybackInput): Promise<void> {
@@ -416,6 +423,7 @@ export class MpvController {
         this.generation,
         (id) => createObservePropertyCommand("paused-for-cache", id),
       );
+      this.applyAudioState(instance);
       this.startHeartbeat(instance);
       this.startPerformanceSampling(instance);
       if (!(await this.synchronizeWindowStacking(instance))) {
@@ -1170,6 +1178,15 @@ export class MpvController {
     this.logBaselineStage("request", this.generation, input.transport);
   }
 
+  private applyAudioState(instance: OwnedMpvInstance): void {
+    this.sendTracked(instance, "audio-control", this.generation, (id) =>
+      createSetAudioPropertyCommand("volume", this.volume, id),
+    );
+    this.sendTracked(instance, "audio-control", this.generation, (id) =>
+      createSetAudioPropertyCommand("mute", this.muted, id),
+    );
+  }
+
   private logBaselineStage(
     stage:
       | "first-frame"
@@ -1237,6 +1254,43 @@ export class MpvController {
     return generation;
   }
 
+  setMuted(muted: boolean): void {
+    this.muted = muted;
+    const instance = this.active;
+    if (!instance || !instance.socket?.writable || instance.processExited) {
+      throw new Error("mpv-not-ready");
+    }
+    this.sendTracked(instance, "audio-control", this.generation, (id) =>
+      createSetAudioPropertyCommand("mute", muted, id),
+    );
+  }
+
+  setVolume(volume: number): void {
+    this.volume = Math.min(100, Math.max(0, volume));
+    const instance = this.active;
+    if (!instance || !instance.socket?.writable || instance.processExited) {
+      throw new Error("mpv-not-ready");
+    }
+    this.sendTracked(instance, "audio-control", this.generation, (id) =>
+      createSetAudioPropertyCommand("volume", this.volume, id),
+    );
+  }
+
+  stopPlayback(): number {
+    const instance = this.active;
+    if (!instance || !instance.socket?.writable || instance.processExited) {
+      throw new Error("mpv-not-ready");
+    }
+    const generation = ++this.generation;
+    this.input = null;
+    this.baselineStages.clear();
+    this.sendTracked(instance, "playback-control", generation, (id) =>
+      createControlCommand("stop", id),
+    );
+    this.logger.write("mpv-playback-stopped", generation);
+    return generation;
+  }
+
   recordWindowGeometry(sample: WindowGeometrySample): void {
     this.logger.write("window-geometry-synchronized", this.generation, {
       displayId: sample.displayId,
@@ -1300,24 +1354,45 @@ export class MpvController {
   private requestWindowStackingSynchronization(
     instance: OwnedMpvInstance,
   ): void {
-    if (this.stackingSynchronizationInFlight || this.shuttingDown) return;
+    if (this.shuttingDown) return;
+    if (this.stackingSynchronizationInFlight) {
+      this.stackingSynchronizationPending = instance;
+      return;
+    }
     this.stackingSynchronizationInFlight = true;
     void this.synchronizeWindowStacking(instance).then(
       (synchronized) => {
-        this.stackingSynchronizationInFlight = false;
-        this.logger.write("mpv-window-stacking-synchronized", this.generation, {
-          instanceId: instance.id,
-          synchronized,
-        });
+        this.completeWindowStackingSynchronization(instance, synchronized);
       },
       () => {
-        this.stackingSynchronizationInFlight = false;
-        this.logger.write("mpv-window-stacking-synchronized", this.generation, {
-          instanceId: instance.id,
-          synchronized: false,
-        });
+        this.completeWindowStackingSynchronization(instance, false);
       },
     );
+  }
+
+  private completeWindowStackingSynchronization(
+    instance: OwnedMpvInstance,
+    synchronized: boolean,
+  ): void {
+    this.stackingSynchronizationInFlight = false;
+    this.logger.write("mpv-window-stacking-synchronized", this.generation, {
+      instanceId: instance.id,
+      synchronized,
+    });
+    if (this.active === instance && !this.shuttingDown) {
+      this.onWindowStackingSynchronized();
+    }
+
+    const pending = this.stackingSynchronizationPending;
+    this.stackingSynchronizationPending = null;
+    if (
+      pending &&
+      pending === this.active &&
+      !pending.processExited &&
+      !this.shuttingDown
+    ) {
+      this.requestWindowStackingSynchronization(pending);
+    }
   }
 
   private startHeartbeat(instance: OwnedMpvInstance): void {
@@ -1505,6 +1580,7 @@ export class MpvController {
 
   private async performShutdown(): Promise<void> {
     this.shuttingDown = true;
+    this.stackingSynchronizationPending = null;
     this.logBaselineStage("shutdown-start", this.generation);
     this.replacementArmed = false;
     if (this.replacementTimer) clearTimeout(this.replacementTimer);

@@ -1,27 +1,37 @@
-export type OverlayAction = "hide" | "show" | "toggle";
+export type OverlayAction =
+  "browse" | "fullscreen" | "hide" | "show" | "toggle";
+
+export type OverlayView = "browse" | "controls";
 
 export type OverlayFeedbackPhase =
   "playing" | "ready" | "recovering" | "unavailable" | "zapping";
 
 export interface OverlayState {
+  channelId: string | null;
+  fading: boolean;
   feedback: string;
   focused: boolean;
   generation: number;
-  next: string;
+  muted: boolean;
   now: string;
   phase: OverlayFeedbackPhase;
+  view: OverlayView;
   visible: boolean;
+  volume: number;
 }
 
 export type OverlayStateEvent =
-  | { focus: boolean; type: "show" }
-  | { type: "hide" }
+  | { focus: boolean; type: "show"; view?: OverlayView }
+  | { type: "hide"; view?: OverlayView }
+  | { type: "fade" }
+  | { muted: boolean; type: "audio"; volume: number }
   | {
       direction: "next" | "previous";
       generation: number;
       type: "zap";
     }
   | {
+      channelId: string;
       channelName: string;
       generation: number;
       type: "channel-zap";
@@ -30,6 +40,7 @@ export type OverlayStateEvent =
       generation: number;
       type: "playing";
     }
+  | { generation: number; type: "stopped" }
   | {
       feedback: string;
       generation: number;
@@ -38,13 +49,17 @@ export type OverlayStateEvent =
   | { type: "unavailable" };
 
 export const INITIAL_OVERLAY_STATE: Readonly<OverlayState> = Object.freeze({
+  channelId: null,
+  fading: false,
   feedback: "Playback controls ready",
   focused: false,
   generation: 0,
-  next: "Next playlist entry",
+  muted: false,
   now: "Current playlist entry",
   phase: "ready",
+  view: "controls",
   visible: false,
+  volume: 100,
 });
 
 export function reduceOverlayState(
@@ -61,9 +76,31 @@ export function reduceOverlayState(
 
   switch (event.type) {
     case "show":
-      return { ...state, focused: event.focus, visible: true };
+      return {
+        ...state,
+        fading: false,
+        focused: event.focus,
+        view: event.view ?? state.view,
+        visible: true,
+      };
     case "hide":
-      return { ...state, focused: false, visible: false };
+      return {
+        ...state,
+        fading: false,
+        focused: false,
+        view: event.view ?? state.view,
+        visible: false,
+      };
+    case "fade":
+      return state.visible && state.view === "controls"
+        ? { ...state, fading: true }
+        : { ...state };
+    case "audio":
+      return {
+        ...state,
+        muted: event.muted,
+        volume: Math.min(100, Math.max(0, event.volume)),
+      };
     case "zap":
       return {
         ...state,
@@ -75,6 +112,7 @@ export function reduceOverlayState(
     case "channel-zap":
       return {
         ...state,
+        channelId: event.channelId,
         feedback: "Channel requested",
         generation: event.generation,
         now: event.channelName,
@@ -87,6 +125,15 @@ export function reduceOverlayState(
         feedback: "Playback resumed",
         generation: event.generation,
         phase: "playing",
+      };
+    case "stopped":
+      return {
+        ...state,
+        channelId: null,
+        feedback: "Playback stopped",
+        generation: event.generation,
+        now: "Choose a channel",
+        phase: "ready",
       };
     case "recovering":
       return {

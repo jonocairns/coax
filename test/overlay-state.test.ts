@@ -5,7 +5,7 @@ import {
 } from "../src/shared/overlay";
 
 describe("playback overlay state", () => {
-  it("uses fixed placeholders and immediate generation-scoped zap feedback", () => {
+  it("uses immediate generation-scoped zap feedback", () => {
     const zapping = reduceOverlayState(INITIAL_OVERLAY_STATE, {
       direction: "next",
       generation: 7,
@@ -15,7 +15,6 @@ describe("playback overlay state", () => {
     expect(zapping).toMatchObject({
       feedback: "Next channel requested",
       generation: 7,
-      next: "Next playlist entry",
       now: "Current playlist entry",
       phase: "zapping",
       visible: true,
@@ -62,5 +61,81 @@ describe("playback overlay state", () => {
 
     expect(zapping.focused).toBe(true);
     expect(recovering.focused).toBe(true);
+  });
+
+  it("preserves browsing mode and audio state across playback feedback", () => {
+    const browsing = reduceOverlayState(INITIAL_OVERLAY_STATE, {
+      focus: true,
+      type: "show",
+      view: "browse",
+    });
+    const withAudio = reduceOverlayState(browsing, {
+      muted: true,
+      type: "audio",
+      volume: 68,
+    });
+    const zapping = reduceOverlayState(withAudio, {
+      channelId: "xch_111111111111111111111111",
+      channelName: "Fixture Sports",
+      generation: 5,
+      type: "channel-zap",
+    });
+
+    expect(zapping).toMatchObject({
+      channelId: "xch_111111111111111111111111",
+      focused: true,
+      muted: true,
+      now: "Fixture Sports",
+      view: "browse",
+      visible: true,
+      volume: 68,
+    });
+  });
+
+  it("can leave browsing hidden while preparing fullscreen controls", () => {
+    const browsing = reduceOverlayState(INITIAL_OVERLAY_STATE, {
+      focus: true,
+      type: "show",
+      view: "browse",
+    });
+
+    expect(
+      reduceOverlayState(browsing, { type: "hide", view: "controls" }),
+    ).toMatchObject({ focused: false, view: "controls", visible: false });
+  });
+
+  it("fades fullscreen controls without fading the channel browser", () => {
+    const controls = reduceOverlayState(INITIAL_OVERLAY_STATE, {
+      focus: false,
+      type: "show",
+      view: "controls",
+    });
+    const browsing = reduceOverlayState(INITIAL_OVERLAY_STATE, {
+      focus: true,
+      type: "show",
+      view: "browse",
+    });
+
+    expect(reduceOverlayState(controls, { type: "fade" }).fading).toBe(true);
+    expect(reduceOverlayState(browsing, { type: "fade" }).fading).toBe(false);
+  });
+
+  it("clears the active channel when playback stops", () => {
+    const playing = reduceOverlayState(INITIAL_OVERLAY_STATE, {
+      channelId: "xch_111111111111111111111111",
+      channelName: "Fixture Sports",
+      generation: 4,
+      type: "channel-zap",
+    });
+
+    expect(
+      reduceOverlayState(playing, { generation: 5, type: "stopped" }),
+    ).toMatchObject({
+      channelId: null,
+      feedback: "Playback stopped",
+      generation: 5,
+      now: "Choose a channel",
+      phase: "ready",
+    });
   });
 });

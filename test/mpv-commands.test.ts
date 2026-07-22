@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMpvArguments,
+  createControlCommand,
   createGetPropertyCommand,
   createLoadfileCommand,
   createMpvPipeName,
   createObservePropertyCommand,
   createPlaylistStepCommand,
+  createSetAudioPropertyCommand,
   createVideoFilterCommand,
   serializeMpvCommand,
 } from "../src/main/mpv/commands";
 
 describe("mpv command construction", () => {
+  it("constructs an explicit stop command", () => {
+    expect(createControlCommand("stop", 100)).toEqual({
+      command: ["stop"],
+      request_id: 100,
+    });
+  });
+
   it("uses an unpredictable per-process pipe without putting a stream in arguments", () => {
     const firstPipe = createMpvPipeName(1234);
     const secondPipe = createMpvPipeName(1234);
@@ -114,5 +123,19 @@ describe("mpv command construction", () => {
       command: ["vf", "set", ""],
       request_id: 105,
     });
+  });
+
+  it("constructs bounded audio property mutations", () => {
+    expect(createSetAudioPropertyCommand("volume", 72, 106)).toEqual({
+      command: ["set_property", "volume", 72],
+      request_id: 106,
+    });
+    expect(createSetAudioPropertyCommand("mute", true, 107)).toEqual({
+      command: ["set_property", "mute", true],
+      request_id: 107,
+    });
+    expect(() =>
+      createSetAudioPropertyCommand("volume", Number.NaN, 108),
+    ).toThrow("invalid-mpv-volume-value");
   });
 });

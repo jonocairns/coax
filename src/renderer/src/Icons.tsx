@@ -2,10 +2,14 @@ type IconName =
   | "arrow-left"
   | "arrow-right"
   | "channels"
-  | "close"
+  | "collapse"
   | "expand"
+  | "list"
   | "play"
-  | "search";
+  | "search"
+  | "stop"
+  | "volume"
+  | "volume-off";
 
 export function Icon({ name }: { name: IconName }): React.JSX.Element {
   const path = {
@@ -17,10 +21,16 @@ export function Icon({ name }: { name: IconName }): React.JSX.Element {
         <path d="m8 2 4 3 4-3" />
       </>
     ),
-    close: (
+    collapse: (
       <>
-        <path d="m7 7 10 10" />
-        <path d="m17 7-10 10" />
+        <path d="M9 9H4V4" />
+        <path d="m4 9 5-5" />
+        <path d="M15 9h5V4" />
+        <path d="m20 9-5-5" />
+        <path d="M9 15H4v5" />
+        <path d="m4 15 5 5" />
+        <path d="M15 15h5v5" />
+        <path d="m20 15-5 5" />
       </>
     ),
     expand: (
@@ -35,11 +45,36 @@ export function Icon({ name }: { name: IconName }): React.JSX.Element {
         <path d="m21 21-6-6" />
       </>
     ),
+    list: (
+      <>
+        <path d="M8 6h13" />
+        <path d="M8 12h13" />
+        <path d="M8 18h13" />
+        <path d="M3 6h.01" />
+        <path d="M3 12h.01" />
+        <path d="M3 18h.01" />
+      </>
+    ),
     play: <path d="m9 7 8 5-8 5Z" />,
     search: (
       <>
         <circle cx="11" cy="11" r="6.5" />
         <path d="m16 16 4 4" />
+      </>
+    ),
+    stop: <rect x="7" y="7" width="10" height="10" rx="1" />,
+    volume: (
+      <>
+        <path d="M11 5 6 9H3v6h3l5 4Z" />
+        <path d="M15.5 9.5a4 4 0 0 1 0 5" />
+        <path d="M18.5 6.5a8 8 0 0 1 0 11" />
+      </>
+    ),
+    "volume-off": (
+      <>
+        <path d="M11 5 6 9H3v6h3l5 4Z" />
+        <path d="m16 10 5 5" />
+        <path d="m21 10-5 5" />
       </>
     ),
   } satisfies Record<IconName, React.JSX.Element>;

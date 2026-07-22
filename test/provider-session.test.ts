@@ -60,6 +60,7 @@ describe("provider channel playback intents", () => {
     const second = deferred<ResolvedProviderPlayback>();
     const loaded: Array<{ channelId?: string; generation: number }> = [];
     let generation = 0;
+    let credentialReads = 0;
     const playback: GenerationPlaybackTarget = {
       isCurrentGeneration: (candidate) => candidate === generation,
       loadReserved: (candidate, input) => {
@@ -83,7 +84,12 @@ describe("provider channel playback intents", () => {
       username: "fixture-user",
     };
     const session = new XtreamProviderSession(
-      { load: async () => credentials },
+      {
+        load: async () => {
+          credentialReads += 1;
+          return credentials;
+        },
+      },
       {
         refresh: async () => catalog,
         resolve: async (_credentials, channel) =>
@@ -125,5 +131,6 @@ describe("provider channel playback intents", () => {
       generation: 1,
     });
     expect(loaded).toEqual([{ channelId: secondChannel.id, generation: 2 }]);
+    expect(credentialReads).toBe(1);
   });
 });
