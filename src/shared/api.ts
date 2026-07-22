@@ -12,6 +12,7 @@ export const IPC_CHANNELS = {
   getOverlayState: "coax:get-overlay-state",
   getProviderState: "coax:get-provider-state",
   getStreamStatsState: "coax:get-stream-stats-state",
+  getWindowState: "coax:get-window-state",
   overlayStateChanged: "coax:overlay-state-changed",
   playProviderChannel: "coax:play-provider-channel",
   providerStateChanged: "coax:provider-state-changed",
@@ -25,6 +26,8 @@ export const IPC_CHANNELS = {
   streamStatsStateChanged: "coax:stream-stats-state-changed",
   toggleMute: "coax:toggle-mute",
   toggleFullscreen: "coax:toggle-fullscreen",
+  windowControl: "coax:window-control",
+  windowStateChanged: "coax:window-state-changed",
 } as const;
 
 export type TestChannelDirection = "next" | "previous";
@@ -35,6 +38,13 @@ export interface RuntimeVersions {
   node: string;
   slice6Acceptance: boolean;
   slice7Acceptance: boolean;
+}
+
+export type WindowControlAction = "close" | "minimize" | "toggle-maximize";
+
+export interface WindowState {
+  fullscreen: boolean;
+  maximized: boolean;
 }
 
 export interface PlaylistIntentResult {
@@ -63,11 +73,13 @@ export interface CoaxApi {
   getOverlayState: () => Promise<OverlayState>;
   getProviderState: () => Promise<ProviderViewState>;
   getStreamStatsState: () => Promise<StreamStatsState>;
+  getWindowState: () => Promise<WindowState>;
   onOverlayState: (listener: (state: OverlayState) => void) => () => void;
   onProviderState: (listener: (state: ProviderViewState) => void) => () => void;
   onStreamStatsState: (
     listener: (state: StreamStatsState) => void,
   ) => () => void;
+  onWindowState: (listener: (state: WindowState) => void) => () => void;
   playProviderChannel: (
     channelId: string,
   ) => Promise<ChannelPlaybackIntentResult>;
@@ -80,4 +92,5 @@ export interface CoaxApi {
   stopPlayback: () => Promise<OverlayState>;
   toggleMute: () => Promise<OverlayState>;
   toggleFullscreen: () => Promise<boolean>;
+  windowControl: (action: WindowControlAction) => Promise<WindowState>;
 }

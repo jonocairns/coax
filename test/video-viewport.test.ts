@@ -4,7 +4,7 @@ import { resolveVideoViewportBounds } from "../src/main/video-viewport";
 describe("native video viewport", () => {
   const windowBounds = { height: 540, width: 960, x: 120, y: 80 };
 
-  it("uses the whole content area in fullscreen", () => {
+  it("uses the whole content area in player mode", () => {
     expect(resolveVideoViewportBounds(windowBounds, null)).toEqual(
       windowBounds,
     );

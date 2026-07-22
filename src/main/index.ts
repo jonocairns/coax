@@ -16,6 +16,8 @@ import {
   type RapidPlaylistTestResult,
   type RuntimeVersions,
   type VideoViewport,
+  type WindowControlAction,
+  type WindowState,
 } from "../shared/api";
 import {
   INTERNAL_CHANNEL_ID_PATTERN,
@@ -73,6 +75,7 @@ import { resolveVideoViewportBounds } from "./video-viewport";
 import {
   createMainWindowOptions,
   createOverlayWindowOptions,
+  resolveContentLayerBounds,
 } from "./window-options";
 
 if (process.platform === "win32") {
@@ -118,6 +121,27 @@ function currentWindow(): BrowserWindow {
     throw new Error("main-window-unavailable");
   }
   return mainWindow;
+}
+
+function currentWindowState(): WindowState {
+  const window = currentWindow();
+  return {
+    fullscreen: window.isFullScreen(),
+    maximized: window.isMaximized(),
+  };
+}
+
+function publishWindowState(fullscreen?: boolean): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const state = currentWindowState();
+  const publishedState =
+    fullscreen === undefined ? state : { ...state, fullscreen };
+  for (const window of [mainWindow, overlayWindow]) {
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+      continue;
+    }
+    window.webContents.send(IPC_CHANNELS.windowStateChanged, publishedState);
+  }
 }
 
 function isKnownRenderer(senderId: number): boolean {
@@ -370,14 +394,19 @@ function stopPointerActivityMonitoring(): void {
 }
 
 function applyOverlayAction(action: OverlayAction): OverlayState {
+  const window = currentWindow();
   if (action === "browse") {
+    if (window.isFullScreen()) setMainWindowFullscreen(false);
     showOverlay(true, "renderer-browse", "browse");
-  } else if (action === "fullscreen") {
+  } else if (action === "watch" || action === "fullscreen") {
     videoViewport = null;
     // Expand the existing native player while the browser still covers it so
-    // revealing fullscreen playback never looks like a stream handoff.
-    alignNativeLayers(currentWindow());
-    hideOverlay("renderer-fullscreen", true, "controls");
+    // revealing player mode never looks like a stream handoff.
+    alignNativeLayers(window);
+    hideOverlay(`renderer-${action}`, true, "controls");
+    if (action === "fullscreen" && !window.isFullScreen()) {
+      setMainWindowFullscreen(true);
+    }
   } else if (action === "hide") {
     if (overlayState.view === "browse") videoViewport = null;
     hideOverlay("renderer-back", true, "controls");
@@ -389,9 +418,8 @@ function applyOverlayAction(action: OverlayAction): OverlayState {
   } else {
     showOverlay(true, "renderer-toggle", "controls");
   }
-  const window = currentWindow();
   alignNativeLayers(window);
-  if (action === "fullscreen" || videoViewport === null) {
+  if (action === "watch" || action === "fullscreen" || videoViewport === null) {
     scheduleGeometrySynchronization(window, "resize");
   }
   return overlayState;
@@ -428,10 +456,22 @@ function setVideoPreviewViewport(viewport: VideoViewport | null): void {
 }
 
 function setStreamStatsVisible(visible: boolean): void {
+  const leavingPreview =
+    visible && overlayState.visible && overlayState.view === "browse";
+  if (leavingPreview) {
+    videoViewport = null;
+    // Statistics are a passive player overlay. Leave the focused browser
+    // first so the video expands and the controls do not remain focused over
+    // a stale preview-sized viewport.
+    hideOverlay("stream-stats-leave-preview", true, "controls");
+  }
   streamStatsVisible = visible;
   publishStreamStatsState();
   if (visible) {
-    showOverlay(false, "stream-stats-shown");
+    showOverlay(false, "stream-stats-shown", "controls");
+    if (leavingPreview) {
+      scheduleGeometrySynchronization(currentWindow(), "resize");
+    }
   } else if (overlayState.visible && !overlayState.focused) {
     hideOverlay("stream-stats-hidden", false);
   } else if (!overlayState.visible) {
@@ -505,6 +545,11 @@ function registerIpcHandlers(): void {
       return currentStreamStatsState();
     },
   );
+  ipcMain.handle(IPC_CHANNELS.getWindowState, (event): WindowState => {
+    if (!isKnownRenderer(event.sender.id))
+      throw new Error("untrusted-renderer");
+    return currentWindowState();
+  });
   ipcMain.handle(
     IPC_CHANNELS.playProviderChannel,
     async (event, channelId: unknown): Promise<ChannelPlaybackIntentResult> => {
@@ -592,6 +637,7 @@ function registerIpcHandlers(): void {
       if (
         action !== "browse" &&
         action !== "fullscreen" &&
+        action !== "watch" &&
         action !== "hide" &&
         action !== "show" &&
         action !== "toggle"
@@ -683,10 +729,30 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.toggleFullscreen, (event): boolean => {
     if (!isKnownRenderer(event.sender.id))
       throw new Error("untrusted-renderer");
-    const window = currentWindow();
-    toggleMainWindowFullscreen();
-    return window.isFullScreen();
+    return toggleMainWindowFullscreen();
   });
+  ipcMain.handle(
+    IPC_CHANNELS.windowControl,
+    (event, action: unknown): WindowState => {
+      if (event.sender.id !== mainWindow?.webContents.id) {
+        throw new Error("untrusted-renderer");
+      }
+      if (
+        action !== "close" &&
+        action !== "minimize" &&
+        action !== "toggle-maximize"
+      ) {
+        throw new Error("invalid-window-control");
+      }
+      const control = action as WindowControlAction;
+      const window = currentWindow();
+      if (control === "close") window.close();
+      else if (control === "minimize") window.minimize();
+      else if (window.isMaximized()) window.unmaximize();
+      else window.maximize();
+      return currentWindowState();
+    },
+  );
 }
 
 function runRapidPlaylistTest(): RapidPlaylistTestResult {
@@ -700,81 +766,33 @@ function runRapidPlaylistTest(): RapidPlaylistTestResult {
   return { finalDirection, finalGeneration, requestCount: 30 };
 }
 
-function toggleMainWindowFullscreen(): void {
+function toggleMainWindowFullscreen(): boolean {
   const window = currentWindow();
-  window.setFullScreen(!window.isFullScreen());
+  const fullscreen = !window.isFullScreen();
+  return setMainWindowFullscreen(fullscreen);
 }
 
-function configureDevelopmentMenu(): void {
-  Menu.setApplicationMenu(
+function setMainWindowFullscreen(fullscreen: boolean): boolean {
+  const window = currentWindow();
+  window.setFullScreen(fullscreen);
+  // Electron's fullscreen transition is asynchronous on Windows. Publish the
+  // requested state now so the renderer does not briefly retain the old title
+  // bar layout while the native playback layers are already being restored.
+  publishWindowState(fullscreen);
+  return fullscreen;
+}
+
+function attachApplicationContextMenu(window: BrowserWindow): void {
+  window.webContents.on("context-menu", () => {
     Menu.buildFromTemplate([
       {
-        label: "Playback",
-        submenu: [
-          {
-            accelerator: "PageUp",
-            click: () => {
-              try {
-                requestPlaylistStep("previous");
-              } catch {
-                // The development action is inert before playback is ready.
-              }
-            },
-            label: "Previous test channel",
-          },
-          {
-            accelerator: "PageDown",
-            click: () => {
-              try {
-                requestPlaylistStep("next");
-              } catch {
-                // The development action is inert before playback is ready.
-              }
-            },
-            label: "Next test channel",
-          },
-          { type: "separator" },
-          {
-            accelerator: "F9",
-            click: () => {
-              try {
-                runRapidPlaylistTest();
-              } catch {
-                // The development action is inert before playback is ready.
-              }
-            },
-            label: "Run 30-change test",
-          },
-        ],
+        checked: streamStatsVisible,
+        click: (menuItem) => setStreamStatsVisible(menuItem.checked),
+        label: "Stream statistics",
+        type: "checkbox",
       },
-      {
-        label: "Overlay",
-        submenu: [
-          {
-            accelerator: "F8",
-            click: () => applyOverlayAction("toggle"),
-            label: "Show or hide playback overlay",
-          },
-        ],
-      },
-      {
-        label: "View",
-        submenu: [
-          {
-            click: (menuItem) => setStreamStatsVisible(menuItem.checked),
-            label: "Stream statistics",
-            type: "checkbox",
-          },
-          { type: "separator" },
-          {
-            accelerator: "F11",
-            click: () => toggleMainWindowFullscreen(),
-            label: "Toggle fullscreen",
-          },
-        ],
-      },
-    ]),
-  );
+    ]).popup({ window });
+  });
 }
 
 function registerAcceptanceShortcuts(): void {
@@ -834,8 +852,9 @@ function recordSettledGeometry(
   const flags = windowState(window);
   if (!decideGeometrySynchronization(reason, flags).record) return;
   const bounds = window.getContentBounds();
+  const layerBounds = resolveContentLayerBounds(bounds, flags.fullscreen);
   alignNativeLayers(window, bounds);
-  const playbackBounds = resolveVideoViewportBounds(bounds, videoViewport);
+  const playbackBounds = resolveVideoViewportBounds(layerBounds, videoViewport);
   const display = screen.getDisplayMatching(playbackBounds);
   mpvController?.recordWindowGeometry({
     displayId: display.id,
@@ -852,13 +871,13 @@ function recordSettledGeometry(
     overlayState.generation,
     {
       displayId: display.id,
-      height: bounds.height,
+      height: layerBounds.height,
       reason,
       scaleFactor: display.scaleFactor,
       state: presentationState(flags),
-      width: bounds.width,
-      x: bounds.x,
-      y: bounds.y,
+      width: layerBounds.width,
+      x: layerBounds.x,
+      y: layerBounds.y,
     },
   );
 }
@@ -867,15 +886,19 @@ function alignNativeLayers(
   window: BrowserWindow,
   bounds = window.getContentBounds(),
 ): void {
+  const layerBounds = resolveContentLayerBounds(bounds, window.isFullScreen());
   const host = videoWindow;
   if (!window.isVisible() || window.isMinimized()) return;
   if (host && !host.isDestroyed() && videoPlaybackReady) {
-    host.setBounds(resolveVideoViewportBounds(bounds, videoViewport), false);
+    host.setBounds(
+      resolveVideoViewportBounds(layerBounds, videoViewport),
+      false,
+    );
     if (!host.isVisible()) host.showInactive();
   }
   const overlay = overlayWindow;
   if (overlay && !overlay.isDestroyed()) {
-    overlay.setBounds(bounds, false);
+    overlay.setBounds(layerBounds, false);
     if (overlayState.visible && !overlay.isVisible()) {
       if (overlayState.focused) overlay.show();
       else overlay.showInactive();
@@ -922,15 +945,39 @@ function attachWindowLifecycle(window: BrowserWindow): void {
     ["leave-full-screen", "leave-full-screen"],
   ];
   for (const [event, reason] of events) {
-    window.on(event as "resize", () =>
-      scheduleGeometrySynchronization(window, reason),
-    );
+    window.on(event as "resize", () => {
+      scheduleGeometrySynchronization(window, reason);
+      if (
+        reason === "maximize" ||
+        reason === "unmaximize" ||
+        reason === "enter-full-screen" ||
+        reason === "leave-full-screen"
+      ) {
+        publishWindowState(
+          reason === "enter-full-screen"
+            ? true
+            : reason === "leave-full-screen"
+              ? false
+              : undefined,
+        );
+      }
+    });
   }
   window.on("minimize", () => {
     videoWindow?.hide();
     overlayWindow?.hide();
   });
   window.webContents.on("before-input-event", (event, input) => {
+    if (
+      input.type === "keyDown" &&
+      input.key === "Escape" &&
+      !input.isAutoRepeat &&
+      window.isFullScreen()
+    ) {
+      event.preventDefault();
+      setMainWindowFullscreen(false);
+      return;
+    }
     if (
       input.type === "keyDown" &&
       input.key === "Escape" &&
@@ -1014,7 +1061,10 @@ function loadRendererSurface(
 }
 
 function createVideoWindow(parent: BrowserWindow): BaseWindow {
-  const bounds = parent.getContentBounds();
+  const bounds = resolveContentLayerBounds(
+    parent.getContentBounds(),
+    parent.isFullScreen(),
+  );
   const window = new BaseWindow({
     ...bounds,
     backgroundColor: "#000000",
@@ -1026,7 +1076,11 @@ function createVideoWindow(parent: BrowserWindow): BaseWindow {
     resizable: false,
     roundedCorners: false,
     show: false,
+    thickFrame: false,
   });
+  // Playback is display-only; pointer input belongs to the shell/overlay so
+  // the application context menu remains available over the video surface.
+  window.setIgnoreMouseEvents(true, { forward: true });
   window.getContentView().setVisible(false);
   window.on("closed", () => {
     if (videoWindow === window) videoWindow = null;
@@ -1037,18 +1091,24 @@ function createVideoWindow(parent: BrowserWindow): BaseWindow {
 function createOverlayWindow(parent: BrowserWindow): BrowserWindow {
   const window = new BrowserWindow({
     ...createOverlayWindowOptions(join(__dirname, "../preload/index.js")),
-    ...parent.getContentBounds(),
+    ...resolveContentLayerBounds(
+      parent.getContentBounds(),
+      parent.isFullScreen(),
+    ),
     parent,
   });
   secureLocalRenderer(window);
+  attachApplicationContextMenu(window);
   window.setIgnoreMouseEvents(true, { forward: true });
   window.webContents.on("did-finish-load", () => publishOverlayState());
   window.webContents.on("before-input-event", (event, input) => {
     if (input.type !== "keyDown" || input.isAutoRepeat) return;
     if (input.key === "Escape") {
       event.preventDefault();
-      if (overlayState.view === "browse") {
-        applyOverlayAction("fullscreen");
+      if (parent.isFullScreen()) {
+        setMainWindowFullscreen(false);
+      } else if (overlayState.view === "browse") {
+        applyOverlayAction("watch");
       } else {
         hideOverlay("keyboard-back", true);
       }
@@ -1113,11 +1173,13 @@ function createMainWindow(): BrowserWindow {
     createMainWindowOptions(join(__dirname, "../preload/index.js")),
   );
   mainWindow = window;
+  window.removeMenu();
   videoWindow = createVideoWindow(window);
   overlayWindow = createOverlayWindow(window);
   attachWindowLifecycle(window);
 
   secureLocalRenderer(window);
+  attachApplicationContextMenu(window);
   window.once("ready-to-show", () => {
     window.show();
     configureControlledAcceptance(window);
@@ -1426,7 +1488,7 @@ async function shutdownOwnedProcesses(): Promise<void> {
 
 void app.whenReady().then(() => {
   registerIpcHandlers();
-  configureDevelopmentMenu();
+  Menu.setApplicationMenu(null);
   registerAcceptanceShortcuts();
   const window = createMainWindow();
   const nativeVideoHost = videoWindow;

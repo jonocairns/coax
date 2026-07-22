@@ -1,5 +1,7 @@
+import { Volume2, VolumeX } from "lucide-react";
 import type { OverlayState } from "../../shared/overlay";
-import { Icon } from "./Icons";
+import { Button } from "./components/ui/button";
+import { cn } from "./lib/utils";
 
 export function VolumeControl({
   compact = false,
@@ -9,23 +11,28 @@ export function VolumeControl({
   state: Pick<OverlayState, "muted" | "volume">;
 }): React.JSX.Element {
   return (
-    <div className={compact ? "volume-control compact" : "volume-control"}>
-      <button
+    <div
+      className={cn(
+        "mt-3 grid min-w-0 grid-cols-[auto_minmax(4rem,1fr)_3.2rem] items-center gap-3 max-[720px]:gap-2",
+        compact && "m-0 w-[min(18rem,32vw)] max-[720px]:w-full",
+      )}
+    >
+      <Button
         aria-label={state.muted ? "Unmute" : "Mute"}
         aria-pressed={state.muted}
-        className="volume-mute"
         onClick={() => void window.coax.toggleMute()}
+        size="icon-lg"
         title={state.muted ? "Unmute" : "Mute"}
         type="button"
+        variant="secondary"
       >
-        <Icon
-          name={state.muted || state.volume === 0 ? "volume-off" : "volume"}
-        />
-      </button>
-      <label>
-        <span className="visually-hidden">Volume</span>
+        {state.muted || state.volume === 0 ? <VolumeX /> : <Volume2 />}
+      </Button>
+      <label className="flex min-w-0">
+        <span className="sr-only">Volume</span>
         <input
           aria-label="Volume"
+          className="w-full cursor-pointer accent-foreground"
           max="100"
           min="0"
           onChange={(event) =>
@@ -36,7 +43,10 @@ export function VolumeControl({
           value={state.volume}
         />
       </label>
-      <output aria-live="polite">
+      <output
+        className="text-right text-xs text-muted-foreground"
+        aria-live="polite"
+      >
         {state.muted ? "Muted" : `${state.volume}%`}
       </output>
     </div>

@@ -1,4 +1,6 @@
 import type { StreamStatsSnapshot } from "../../shared/stream-stats";
+import { StatusIndicator } from "./components/StatusIndicator";
+import { cn } from "./lib/utils";
 
 function dimensions(width: number | null, height: number | null): string {
   return width !== null && height !== null ? `${width} × ${height}` : "—";
@@ -22,9 +24,16 @@ function Stat({
   value: string;
 }): React.JSX.Element {
   return (
-    <div className="stream-stat" data-alert={alert || undefined}>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
+    <div className="flex min-w-0 items-baseline justify-between gap-3 border-t py-1.5 first:border-t-0">
+      <dt className="shrink-0 text-[0.66rem] text-muted-foreground">{label}</dt>
+      <dd
+        className={cn(
+          "m-0 min-w-0 truncate text-right font-mono text-[0.68rem] text-foreground/85",
+          alert && "text-warning",
+        )}
+      >
+        {value}
+      </dd>
     </div>
   );
 }
@@ -40,30 +49,42 @@ export function StreamStatsPanel({
   const mistimedFrames = snapshot.mistimedFrames ?? 0;
 
   return (
-    <aside className="stream-stats-panel" aria-label="Stream statistics">
-      <header>
+    <aside
+      className="ml-auto w-full max-w-4xl rounded-xl border bg-background/95 px-4.5 pt-4 pb-3.5 shadow-2xl backdrop-blur-md max-[720px]:max-h-[75vh] max-[720px]:overflow-y-auto"
+      aria-label="Stream statistics"
+    >
+      <header className="mb-3.5 flex items-end justify-between gap-4">
         <div>
-          <p className="section-label">Diagnostics</p>
-          <h2>Stream health</h2>
+          <p className="mb-1 text-[0.62rem] font-semibold tracking-[0.11em] text-muted-foreground uppercase">
+            Diagnostics
+          </p>
+          <h2 className="text-lg font-semibold tracking-tight">
+            Stream health
+          </h2>
         </div>
-        <span
-          className={
-            snapshot.cachePaused ? "health-status warning" : "health-status"
+        <StatusIndicator
+          tone={
+            !snapshot.available
+              ? "default"
+              : snapshot.cachePaused
+                ? "warning"
+                : "success"
           }
         >
-          <span aria-hidden="true" />
           {snapshot.available
             ? snapshot.cachePaused
               ? "Buffering"
               : "Live"
             : "Waiting for video"}
-        </span>
+        </StatusIndicator>
       </header>
 
-      <div className="stream-stats-groups">
-        <section>
-          <h3>Signal</h3>
-          <dl>
+      <div className="grid grid-cols-[1fr_1.35fr_1.25fr] gap-3 max-[720px]:grid-cols-1">
+        <section className="min-w-0 rounded-xl border bg-card/50 p-3">
+          <h3 className="mb-2.5 text-[0.62rem] font-bold tracking-[0.1em] text-muted-foreground uppercase">
+            Signal
+          </h3>
+          <dl className="grid">
             <Stat
               label="Source"
               value={dimensions(snapshot.sourceWidth, snapshot.sourceHeight)}
@@ -82,9 +103,11 @@ export function StreamStatsPanel({
             <Stat label="Display" value={decimal(snapshot.displayFps, " Hz")} />
           </dl>
         </section>
-        <section>
-          <h3>Continuity</h3>
-          <dl>
+        <section className="min-w-0 rounded-xl border bg-card/50 p-3">
+          <h3 className="mb-2.5 text-[0.62rem] font-bold tracking-[0.1em] text-muted-foreground uppercase">
+            Continuity
+          </h3>
+          <dl className="grid">
             <Stat
               alert={outputDrops > 0}
               label="Output drops"
@@ -119,9 +142,11 @@ export function StreamStatsPanel({
             />
           </dl>
         </section>
-        <section>
-          <h3>Video path</h3>
-          <dl>
+        <section className="min-w-0 rounded-xl border bg-card/50 p-3">
+          <h3 className="mb-2.5 text-[0.62rem] font-bold tracking-[0.1em] text-muted-foreground uppercase">
+            Video path
+          </h3>
+          <dl className="grid">
             <Stat
               label="Decoder"
               value={snapshot.hardwareDecoder ?? snapshot.decoder ?? "—"}
@@ -141,7 +166,7 @@ export function StreamStatsPanel({
           </dl>
         </section>
       </div>
-      <p className="stream-stats-note">
+      <p className="mt-3 text-[0.62rem] text-muted-foreground/75">
         Frame counters reset when the channel changes. RTX VSR attachment does
         not confirm driver processing.
       </p>

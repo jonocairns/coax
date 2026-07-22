@@ -92,7 +92,7 @@ describe("playback overlay state", () => {
     });
   });
 
-  it("can leave browsing hidden while preparing fullscreen controls", () => {
+  it("can leave browsing hidden while preparing player controls", () => {
     const browsing = reduceOverlayState(INITIAL_OVERLAY_STATE, {
       focus: true,
       type: "show",
@@ -104,7 +104,7 @@ describe("playback overlay state", () => {
     ).toMatchObject({ focused: false, view: "controls", visible: false });
   });
 
-  it("fades fullscreen controls without fading the channel browser", () => {
+  it("fades player controls without fading the channel browser", () => {
     const controls = reduceOverlayState(INITIAL_OVERLAY_STATE, {
       focus: false,
       type: "show",

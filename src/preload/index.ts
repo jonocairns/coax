@@ -7,6 +7,8 @@ import {
   type RuntimeVersions,
   type TestChannelDirection,
   type VideoViewport,
+  type WindowControlAction,
+  type WindowState,
 } from "../shared/api";
 import type {
   ChannelPlaybackIntentResult,
@@ -36,6 +38,8 @@ const api: CoaxApi = Object.freeze({
     ipcRenderer.invoke(
       IPC_CHANNELS.getStreamStatsState,
     ) as Promise<StreamStatsState>,
+  getWindowState: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getWindowState) as Promise<WindowState>,
   onOverlayState: (listener: (state: OverlayState) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: OverlayState) =>
       listener(state);
@@ -60,6 +64,13 @@ const api: CoaxApi = Object.freeze({
     ipcRenderer.on(IPC_CHANNELS.streamStatsStateChanged, handler);
     return () =>
       ipcRenderer.removeListener(IPC_CHANNELS.streamStatsStateChanged, handler);
+  },
+  onWindowState: (listener: (state: WindowState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: WindowState) =>
+      listener(state);
+    ipcRenderer.on(IPC_CHANNELS.windowStateChanged, handler);
+    return () =>
+      ipcRenderer.removeListener(IPC_CHANNELS.windowStateChanged, handler);
   },
   playProviderChannel: (channelId: string) =>
     ipcRenderer.invoke(
@@ -97,6 +108,11 @@ const api: CoaxApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.toggleMute) as Promise<OverlayState>,
   toggleFullscreen: () =>
     ipcRenderer.invoke(IPC_CHANNELS.toggleFullscreen) as Promise<boolean>,
+  windowControl: (action: WindowControlAction) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.windowControl,
+      action,
+    ) as Promise<WindowState>,
 });
 
 contextBridge.exposeInMainWorld("coax", api);
