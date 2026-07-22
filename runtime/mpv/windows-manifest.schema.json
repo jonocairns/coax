@@ -10,12 +10,13 @@
     "target",
     "artifact",
     "source",
+    "selectedAt",
     "notes"
   ],
   "properties": {
     "$schema": { "type": "string" },
     "schemaVersion": { "const": 1 },
-    "status": { "enum": ["unselected", "pinned"] },
+    "status": { "const": "pinned" },
     "target": {
       "type": "object",
       "additionalProperties": false,
@@ -28,14 +29,16 @@
     "artifact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "sha256"],
+      "required": ["url", "fileName", "sha256", "sizeBytes", "releaseUrl"],
       "properties": {
-        "url": { "type": ["string", "null"], "format": "uri" },
-        "sha256": {
-          "anyOf": [
-            { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-            { "type": "null" }
-          ]
+        "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "fileName": { "type": "string", "pattern": "^[^/]+\\.7z$" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sizeBytes": { "type": "integer", "minimum": 1 },
+        "releaseUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
         }
       }
     },
@@ -43,57 +46,73 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "upstreamInstallationUrl",
         "buildProjectUrl",
+        "buildProjectCommit",
+        "buildProjectSourceUrl",
+        "workflowUrl",
+        "mpvRepositoryUrl",
         "mpvCommit",
+        "mpvSourceUrl",
+        "ffmpegRepositoryUrl",
         "ffmpegCommit",
+        "ffmpegSourceUrl",
         "buildConfiguration"
       ],
       "properties": {
-        "buildProjectUrl": { "type": ["string", "null"], "format": "uri" },
-        "mpvCommit": {
-          "anyOf": [
-            { "type": "string", "pattern": "^[a-f0-9]{40}$" },
-            { "type": "null" }
-          ]
+        "upstreamInstallationUrl": { "type": "string", "format": "uri" },
+        "buildProjectUrl": { "type": "string", "format": "uri" },
+        "buildProjectCommit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
         },
-        "ffmpegCommit": {
-          "anyOf": [
-            { "type": "string", "pattern": "^[a-f0-9]{40}$" },
-            { "type": "null" }
-          ]
-        },
-        "buildConfiguration": { "type": ["string", "null"] }
+        "buildProjectSourceUrl": { "type": "string", "format": "uri" },
+        "workflowUrl": { "type": "string", "format": "uri" },
+        "mpvRepositoryUrl": { "type": "string", "format": "uri" },
+        "mpvCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "mpvSourceUrl": { "type": "string", "format": "uri" },
+        "ffmpegRepositoryUrl": { "type": "string", "format": "uri" },
+        "ffmpegCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "ffmpegSourceUrl": { "type": "string", "format": "uri" },
+        "buildConfiguration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "workflow",
+            "compiler",
+            "targetTriplet",
+            "cpuBaseline",
+            "cmakeOptions",
+            "mpvOptions",
+            "ffmpegLicenseOptions",
+            "artifactFlavor"
+          ],
+          "properties": {
+            "workflow": { "type": "string", "minLength": 1 },
+            "compiler": { "type": "string", "minLength": 1 },
+            "targetTriplet": { "const": "x86_64-w64-mingw32" },
+            "cpuBaseline": { "const": "x86-64" },
+            "cmakeOptions": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1
+            },
+            "mpvOptions": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1
+            },
+            "ffmpegLicenseOptions": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1
+            },
+            "artifactFlavor": { "type": "string", "minLength": 1 }
+          }
+        }
       }
     },
-    "selectedAt": { "type": ["string", "null"], "format": "date-time" },
+    "selectedAt": { "type": "string", "format": "date-time" },
     "notes": { "type": "string", "minLength": 1 }
-  },
-  "allOf": [
-    {
-      "if": {
-        "properties": { "status": { "const": "pinned" } },
-        "required": ["status"]
-      },
-      "then": {
-        "properties": {
-          "artifact": {
-            "properties": {
-              "url": { "type": "string", "format": "uri" },
-              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
-            }
-          },
-          "source": {
-            "properties": {
-              "buildProjectUrl": { "type": "string", "format": "uri" },
-              "mpvCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
-              "ffmpegCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
-              "buildConfiguration": { "type": "string", "minLength": 1 }
-            }
-          },
-          "selectedAt": { "type": "string", "format": "date-time" }
-        },
-        "required": ["selectedAt"]
-      }
-    }
-  ]
+  }
 }

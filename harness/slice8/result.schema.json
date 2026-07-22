@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coax.invalid/schemas/slice8-result-v1.json",
+  "title": "Coax clean-stream harness result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "contractVersion",
+    "faultSchedule",
+    "startedAt",
+    "completedAt",
+    "proxy",
+    "benchmarkConfiguration",
+    "cases",
+    "comparability",
+    "aes128",
+    "redaction",
+    "networkProbe",
+    "namedPipeAcl"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "contractVersion": { "const": "coax-clean-stream-v1" },
+    "faultSchedule": { "type": "null" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": "string", "format": "date-time" },
+    "proxy": { "type": "object" },
+    "benchmarkConfiguration": { "type": "object" },
+    "cases": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/case" }
+    },
+    "redaction": { "$ref": "#/$defs/check" },
+    "comparability": { "$ref": "#/$defs/check" },
+    "aes128": { "$ref": "#/$defs/check" },
+    "networkProbe": { "type": "object" },
+    "namedPipeAcl": { "type": "object" }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["pass", "fail", "open"] }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "iteration",
+        "transport",
+        "playerPath",
+        "status",
+        "timestamps",
+        "durationsMs",
+        "observation",
+        "cleanShutdown"
+      ],
+      "properties": {
+        "caseId": { "type": "string" },
+        "iteration": { "type": "integer", "minimum": 1 },
+        "transport": { "enum": ["mpeg-ts", "hls"] },
+        "playerPath": { "type": "string", "pattern": "^/v1/stream/" },
+        "status": { "enum": ["pass", "fail", "open"] },
+        "timestamps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "start",
+            "request",
+            "firstFrame",
+            "playback",
+            "shutdownStart",
+            "shutdownComplete"
+          ],
+          "properties": {
+            "start": { "type": ["string", "null"] },
+            "request": { "type": ["string", "null"] },
+            "firstFrame": { "type": ["string", "null"] },
+            "playback": { "type": ["string", "null"] },
+            "shutdownStart": { "type": ["string", "null"] },
+            "shutdownComplete": { "type": ["string", "null"] }
+          }
+        },
+        "durationsMs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requestToFirstFrame",
+            "firstFrameToPlayback",
+            "shutdown"
+          ],
+          "properties": {
+            "requestToFirstFrame": { "type": ["number", "null"] },
+            "firstFrameToPlayback": { "type": ["number", "null"] },
+            "shutdown": { "type": ["number", "null"] }
+          }
+        },
+        "observation": { "type": "object" },
+        "cleanShutdown": { "type": "boolean" }
+      }
+    }
+  }
+}

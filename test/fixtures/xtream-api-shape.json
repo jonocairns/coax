@@ -1,0 +1,24 @@
+{
+  "account": {
+    "user_info": {
+      "auth": "1",
+      "status": "Active",
+      "allowed_output_formats": ["ts", "m3u8"]
+    },
+    "server_info": {
+      "url": "provider.invalid",
+      "server_protocol": "https"
+    }
+  },
+  "categories": [
+    { "category_id": "10", "category_name": "Sports" },
+    { "category_id": 20, "category_name": "News" },
+    { "category_id": "30" }
+  ],
+  "streams": [
+    { "stream_id": 101, "name": "Fixture Sports", "category_id": "10" },
+    { "stream_id": "102", "name": "Fixture News", "category_id": 20 },
+    { "stream_id": "not-an-id", "name": "Malformed", "category_id": "10" },
+    { "stream_id": 103, "name": "Unknown category", "category_id": "999" }
+  ]
+}

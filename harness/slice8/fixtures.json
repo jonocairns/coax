@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": "coax-clean-stream-v1",
+  "faultSchedule": null,
+  "generator": {
+    "kind": "ffmpeg-lavfi",
+    "video": "testsrc2 640x360 25 fps H.264 yuv420p",
+    "audio": "1 kHz sine 48 kHz AAC"
+  },
+  "fixtures": [
+    {
+      "id": "clean-ts",
+      "playerPath": "/v1/stream/ts",
+      "transport": "mpeg-ts",
+      "continuous": true,
+      "encrypted": false
+    },
+    {
+      "id": "clean-hls",
+      "playerPath": "/v1/stream/hls/index.m3u8",
+      "transport": "hls",
+      "continuous": true,
+      "encrypted": false
+    },
+    {
+      "id": "clean-aes128-hls",
+      "playerPath": "/v1/stream/hls-aes/index.m3u8",
+      "transport": "hls",
+      "continuous": true,
+      "encrypted": true,
+      "encryptionMethod": "AES-128"
+    }
+  ]
+}

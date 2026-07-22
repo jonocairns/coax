@@ -1,5 +1,6 @@
 flake.lock
 .cache/
+artifacts/
 node_modules/
 out/
 pnpm-lock.yaml
