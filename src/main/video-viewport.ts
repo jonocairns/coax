@@ -21,3 +21,16 @@ export function resolveVideoViewportBounds(
     y: windowBounds.y + y,
   };
 }
+
+export function resolvePlaybackBounds(
+  contentBounds: Rectangle,
+  videoLayerBounds: Rectangle,
+  viewport: VideoViewport | null,
+): Rectangle {
+  // Renderer viewport coordinates are relative to the complete web contents,
+  // which includes the custom title bar. Only full-player mode uses the
+  // title-bar-excluding native layer bounds.
+  return viewport
+    ? resolveVideoViewportBounds(contentBounds, viewport)
+    : { ...videoLayerBounds };
+}

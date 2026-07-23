@@ -57,10 +57,16 @@ export const INITIAL_OVERLAY_STATE: Readonly<OverlayState> = Object.freeze({
   muted: false,
   now: "Current playlist entry",
   phase: "ready",
-  view: "controls",
+  view: "browse",
   visible: false,
   volume: 100,
 });
+
+export function shouldRevealPlaybackControlsForPointer(
+  state: Pick<OverlayState, "fading" | "view" | "visible">,
+): boolean {
+  return state.view === "controls" && (!state.visible || state.fading);
+}
 
 export function reduceOverlayState(
   state: Readonly<OverlayState>,
@@ -117,7 +123,6 @@ export function reduceOverlayState(
         generation: event.generation,
         now: event.channelName,
         phase: "zapping",
-        visible: true,
       };
     case "playing":
       return {

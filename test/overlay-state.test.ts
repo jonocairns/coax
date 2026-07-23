@@ -2,9 +2,45 @@ import { describe, expect, it } from "vitest";
 import {
   INITIAL_OVERLAY_STATE,
   reduceOverlayState,
+  shouldRevealPlaybackControlsForPointer,
 } from "../src/shared/overlay";
 
 describe("playback overlay state", () => {
+  it("does not replace the channel browser after pointer activity selects a channel", () => {
+    expect(
+      shouldRevealPlaybackControlsForPointer({
+        fading: false,
+        view: "browse",
+        visible: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("reveals hidden playback controls while watching video", () => {
+    expect(
+      shouldRevealPlaybackControlsForPointer({
+        fading: false,
+        view: "controls",
+        visible: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the transparent overlay hidden while the main shell is browsing", () => {
+    const zapping = reduceOverlayState(INITIAL_OVERLAY_STATE, {
+      channelId: "xch_111111111111111111111111",
+      channelName: "Fixture Sports",
+      generation: 1,
+      type: "channel-zap",
+    });
+
+    expect(zapping).toMatchObject({
+      phase: "zapping",
+      view: "browse",
+      visible: false,
+    });
+  });
+
   it("uses immediate generation-scoped zap feedback", () => {
     const zapping = reduceOverlayState(INITIAL_OVERLAY_STATE, {
       direction: "next",

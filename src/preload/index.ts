@@ -14,11 +14,18 @@ import type {
   ChannelPlaybackIntentResult,
   ProviderViewState,
   RapidProviderPlaybackResult,
+  SourceMutationResult,
+  XtreamSourceSetupInput,
 } from "../shared/provider";
 import type { OverlayAction, OverlayState } from "../shared/overlay";
 import type { StreamStatsState } from "../shared/stream-stats";
 
 const api: CoaxApi = Object.freeze({
+  configureXtreamSource: (input: XtreamSourceSetupInput) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.configureXtreamSource,
+      input,
+    ) as Promise<SourceMutationResult>,
   cycleTestChannel: (direction: TestChannelDirection) =>
     ipcRenderer.invoke(
       IPC_CHANNELS.cycleTestChannel,
@@ -82,6 +89,10 @@ const api: CoaxApi = Object.freeze({
       IPC_CHANNELS.requestOverlayAction,
       action,
     ) as Promise<OverlayState>,
+  removeXtreamSource: () =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.removeXtreamSource,
+    ) as Promise<SourceMutationResult>,
   runRapidPlaylistTest: () =>
     ipcRenderer.invoke(
       IPC_CHANNELS.runRapidPlaylistTest,
@@ -94,6 +105,11 @@ const api: CoaxApi = Object.freeze({
     ipcRenderer.invoke(
       IPC_CHANNELS.setOverlayPointerCapture,
       capture,
+    ) as Promise<void>,
+  setVideoPreviewVisible: (visible: boolean) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.setVideoPreviewVisible,
+      visible,
     ) as Promise<void>,
   setVideoViewport: (viewport: VideoViewport | null) =>
     ipcRenderer.invoke(

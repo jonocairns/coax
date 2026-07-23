@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { XtreamSourceSetupInput } from "../../shared/provider";
 
 const MAX_INPUT_BYTES = 64 * 1024;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$/;
@@ -30,6 +31,78 @@ export interface XtreamCredentials {
   playbackRequest: ScopedHttpSettings;
   providerRequest: ScopedHttpSettings;
   username: string;
+}
+
+export interface ParsedXtreamSourceSetupInput {
+  credentials: XtreamCredentials;
+  name: string;
+}
+
+export function parseSourceDisplayName(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 80 ||
+    /[\r\n\0]/.test(value)
+  ) {
+    throw new Error("invalid-source-name");
+  }
+  const name = value.trim();
+  if (!name) throw new Error("invalid-source-name");
+  return name;
+}
+
+export function parseXtreamSourceSetupInput(
+  value: unknown,
+): ParsedXtreamSourceSetupInput {
+  if (!isRecord(value)) throw new Error("invalid-source-input");
+  const allowed = new Set([
+    "name",
+    "outputPreference",
+    "password",
+    "serverUrl",
+    "username",
+  ]);
+  if (
+    Object.keys(value).length !== allowed.size ||
+    Object.keys(value).some((key) => !allowed.has(key))
+  ) {
+    throw new Error("invalid-source-input");
+  }
+  const input = value as unknown as XtreamSourceSetupInput;
+  if (typeof input.serverUrl !== "string") {
+    throw new Error("invalid-source-server-url");
+  }
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(input.serverUrl);
+  } catch {
+    throw new Error("invalid-source-server-url");
+  }
+  if (
+    !["http:", "https:"].includes(parsedUrl.protocol) ||
+    parsedUrl.username ||
+    parsedUrl.password ||
+    parsedUrl.search ||
+    parsedUrl.hash
+  ) {
+    throw new Error("invalid-source-server-url");
+  }
+  parsedUrl.pathname = `${parsedUrl.pathname.replace(/\/+$/, "")}/`;
+  if (input.outputPreference !== "ts" && input.outputPreference !== "hls") {
+    throw new Error("invalid-source-output-preference");
+  }
+  return {
+    credentials: {
+      baseUrl: parsedUrl.toString(),
+      outputFormats: [input.outputPreference === "hls" ? "m3u8" : "ts"],
+      password: cleanSecret(input.password, "password"),
+      playbackRequest: { headers: {} },
+      providerRequest: { headers: {} },
+      username: cleanSecret(input.username, "username"),
+    },
+    name: parseSourceDisplayName(input.name),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
