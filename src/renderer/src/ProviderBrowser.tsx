@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Play, Search, Tv } from "lucide-react";
+import { ArrowLeft, Play, Search, Trash2 } from "lucide-react";
 import { filterChannels } from "../../shared/channel-filter";
 import type { OverlayFeedbackPhase } from "../../shared/overlay";
 import type {
@@ -15,6 +15,7 @@ import type {
   ProviderViewState,
 } from "../../shared/provider";
 import { StatusIndicator } from "./components/StatusIndicator";
+import { SourceSetupForm } from "./SourceSetupForm";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -31,8 +32,149 @@ interface ProviderBrowserProps {
   activeChannelId?: string | null;
   compact?: boolean;
   onInitialized?: () => void;
+  onSourceManagementChange?: (open: boolean) => void;
   playbackFeedback?: string;
   playbackPhase?: OverlayFeedbackPhase;
+  sourceManagement?: boolean;
+}
+
+function SourceManagementPanel({
+  channelCount,
+  confirmingRemoval,
+  outputLabel,
+  removalError,
+  removingSource,
+  showReplacement,
+  sourceName,
+  onCancel,
+  onConfirmRemoval,
+  onRemove,
+  onShowReplacement,
+}: {
+  channelCount: number;
+  confirmingRemoval: boolean;
+  onCancel: () => void;
+  onConfirmRemoval: (confirming: boolean) => void;
+  onRemove: () => void;
+  onShowReplacement: (show: boolean) => void;
+  outputLabel: string;
+  removalError: string | null;
+  removingSource: boolean;
+  showReplacement: boolean;
+  sourceName: string;
+}): React.JSX.Element {
+  return (
+    <div className="rounded-xl border bg-background/55 p-6">
+      <div className="mx-auto max-w-xl">
+        <div className="mb-7 flex items-center justify-between gap-4">
+          <div>
+            <p className="mb-1 text-[0.68rem] font-semibold tracking-[0.11em] text-muted-foreground uppercase">
+              Settings
+            </p>
+            <h2 className="text-2xl font-semibold">Source management</h2>
+          </div>
+          <Button onClick={onCancel} type="button" variant="ghost">
+            <ArrowLeft />
+            Back to channels
+          </Button>
+        </div>
+        <p className="mb-2 text-[0.68rem] font-semibold tracking-[0.11em] text-muted-foreground uppercase">
+          Current source
+        </p>
+        <div className="rounded-lg border bg-card p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span
+                  aria-hidden="true"
+                  className="size-2 rounded-full bg-success"
+                />
+                <p className="text-sm font-semibold">{sourceName}</p>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {channelCount} {channelCount === 1 ? "channel" : "channels"} ·{" "}
+                {outputLabel}
+              </p>
+            </div>
+            {!confirmingRemoval && (
+              <Button
+                onClick={() => onConfirmRemoval(true)}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Trash2 />
+                Remove
+              </Button>
+            )}
+          </div>
+        </div>
+        {!confirmingRemoval ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Account details stay encrypted on this device and are never shown
+            here.
+          </p>
+        ) : (
+          <div
+            className="mt-3 rounded-lg border border-destructive/35 bg-destructive/5 p-4"
+            role="alert"
+          >
+            <p className="text-sm font-medium">Remove this TV source?</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Its encrypted account record will be deleted and you’ll return to
+              first-run setup.
+            </p>
+            {removalError && (
+              <p className="mt-3 text-xs text-destructive">{removalError}</p>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                disabled={removingSource}
+                onClick={() => onConfirmRemoval(false)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                Keep source
+              </Button>
+              <Button
+                disabled={removingSource}
+                onClick={onRemove}
+                size="sm"
+                type="button"
+                variant="destructive"
+              >
+                <Trash2 />
+                {removingSource ? "Removing…" : "Yes, remove source"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="mx-auto mt-7 max-w-xl border-t pt-5">
+        {!showReplacement ? (
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium">Replace this source</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                The current source stays active until its replacement is
+                validated.
+              </p>
+            </div>
+            <Button onClick={() => onShowReplacement(true)} type="button">
+              Replace source
+            </Button>
+          </div>
+        ) : (
+          <SourceSetupForm
+            mode="replace"
+            onCancel={() => onShowReplacement(false)}
+            onSaved={onCancel}
+          />
+        )}
+      </div>
+    </div>
+  );
 }
 
 const ChannelButton = memo(function ChannelButton({
@@ -109,13 +251,20 @@ function ProviderBrowserComponent({
   activeChannelId: controlledActiveChannelId,
   compact = false,
   onInitialized,
+  onSourceManagementChange,
   playbackFeedback,
   playbackPhase,
+  sourceManagement,
 }: ProviderBrowserProps): React.JSX.Element {
+  const canManageSource = sourceManagement ?? !compact;
   const browserClassName = cn(
     "min-w-0 rounded-xl border bg-card p-[clamp(1.1rem,2.5vw,1.75rem)]",
     compact &&
-      "grid h-full w-full grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-none border-0 bg-surface-subtle px-4 py-3 max-[720px]:px-3",
+      "grid h-full w-full overflow-hidden rounded-none border-0 bg-surface-subtle px-4 py-3 max-[720px]:px-3",
+    compact &&
+      (canManageSource
+        ? "grid-rows-[auto_auto_minmax(0,1fr)_auto]"
+        : "grid-rows-[auto_minmax(0,1fr)_auto]"),
   );
   const [provider, setProvider] = useState<ProviderViewState>({
     phase: "loading",
@@ -129,6 +278,11 @@ function ProviderBrowserComponent({
     string | null
   >(null);
   const [feedback, setFeedback] = useState("Select a channel to play");
+  const [showSourceSetup, setShowSourceSetup] = useState(false);
+  const [showReplacementForm, setShowReplacementForm] = useState(false);
+  const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+  const [removingSource, setRemovingSource] = useState(false);
+  const [removalError, setRemovalError] = useState<string | null>(null);
   const playbackRequest = useRef(0);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const activeChannelId =
@@ -149,6 +303,30 @@ function ProviderBrowserComponent({
   useEffect(() => {
     if (provider.phase !== "loading") onInitialized?.();
   }, [onInitialized, provider.phase]);
+
+  useEffect(() => {
+    if (!canManageSource || provider.phase === "loading") return;
+    onSourceManagementChange?.(provider.phase !== "ready" || showSourceSetup);
+  }, [
+    canManageSource,
+    onSourceManagementChange,
+    provider.phase,
+    showSourceSetup,
+  ]);
+
+  useEffect(() => {
+    if (!showSourceSetup) return;
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || provider.phase !== "ready") return;
+      event.preventDefault();
+      setShowSourceSetup(false);
+      setShowReplacementForm(false);
+      setConfirmingRemoval(false);
+      setRemovalError(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [provider.phase, showSourceSetup]);
 
   const categoryDetails = useMemo(() => {
     if (provider.phase !== "ready") return [];
@@ -262,6 +440,24 @@ function ProviderBrowserComponent({
     }
   }
 
+  async function removeSource(): Promise<void> {
+    setRemovingSource(true);
+    setRemovalError(null);
+    setFeedback("Removing the source and encrypted account record…");
+    try {
+      const result = await window.coax.removeXtreamSource();
+      if (!result.ok) {
+        setFeedback(result.error.message);
+        setRemovalError(result.error.message);
+      }
+    } catch {
+      setFeedback("The source could not be removed.");
+      setRemovalError("The source could not be removed.");
+    } finally {
+      setRemovingSource(false);
+    }
+  }
+
   if (provider.phase === "loading") {
     return (
       <div
@@ -277,6 +473,19 @@ function ProviderBrowserComponent({
     );
   }
   if (provider.phase === "not-configured") {
+    if (canManageSource) {
+      return (
+        <div
+          className={cn(
+            browserClassName,
+            "min-h-68 p-8",
+            compact && "block overflow-y-auto",
+          )}
+        >
+          <SourceSetupForm />
+        </div>
+      );
+    }
     return (
       <div
         className={cn(
@@ -285,9 +494,6 @@ function ProviderBrowserComponent({
         )}
         role="status"
       >
-        <span className="grid size-14 place-items-center rounded-2xl border bg-card text-brand">
-          <Tv />
-        </span>
         <h2 className="mt-4 mb-2 text-xl font-semibold">No source connected</h2>
         <p className="max-w-md text-muted-foreground">
           Connect a TV provider to see your live channels here.
@@ -296,6 +502,27 @@ function ProviderBrowserComponent({
     );
   }
   if (provider.phase === "error") {
+    if (canManageSource) {
+      return (
+        <div
+          className={cn(
+            browserClassName,
+            "min-h-68 p-8",
+            compact && "block overflow-y-auto",
+          )}
+        >
+          <div className="mx-auto mb-6 max-w-xl rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">
+            <p className="font-medium text-destructive">
+              The current source is unavailable
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              {provider.error.message} You can test replacement details below.
+            </p>
+          </div>
+          <SourceSetupForm />
+        </div>
+      );
+    }
     return (
       <div
         className={cn(
@@ -314,8 +541,83 @@ function ProviderBrowserComponent({
     );
   }
 
+  const closeSourceManagement = (): void => {
+    setShowSourceSetup(false);
+    setShowReplacementForm(false);
+    setConfirmingRemoval(false);
+    setRemovalError(null);
+    onSourceManagementChange?.(false);
+  };
+  const setRemovalConfirmation = (confirming: boolean): void => {
+    setConfirmingRemoval(confirming);
+    if (!confirming) setRemovalError(null);
+  };
+  const outputTransports = new Set(
+    provider.channels.map((channel) => channel.transport),
+  );
+  const outputLabel =
+    outputTransports.size > 1
+      ? "MPEG-TS and HLS"
+      : outputTransports.has("hls")
+        ? "HLS output"
+        : "MPEG-TS output";
+  if (compact && canManageSource && showSourceSetup) {
+    return (
+      <section className={cn(browserClassName, "block overflow-y-auto p-4")}>
+        <SourceManagementPanel
+          channelCount={provider.counts.channelsNormalized}
+          confirmingRemoval={confirmingRemoval}
+          onCancel={closeSourceManagement}
+          onConfirmRemoval={setRemovalConfirmation}
+          onRemove={() => void removeSource()}
+          onShowReplacement={setShowReplacementForm}
+          outputLabel={outputLabel}
+          removalError={removalError}
+          removingSource={removingSource}
+          showReplacement={showReplacementForm}
+          sourceName={provider.source.name}
+        />
+      </section>
+    );
+  }
+
   return (
     <section className={browserClassName}>
+      {!compact && canManageSource && showSourceSetup && (
+        <div className="mb-6">
+          <SourceManagementPanel
+            channelCount={provider.counts.channelsNormalized}
+            confirmingRemoval={confirmingRemoval}
+            onCancel={closeSourceManagement}
+            onConfirmRemoval={setRemovalConfirmation}
+            onRemove={() => void removeSource()}
+            onShowReplacement={setShowReplacementForm}
+            outputLabel={outputLabel}
+            removalError={removalError}
+            removingSource={removingSource}
+            showReplacement={showReplacementForm}
+            sourceName={provider.source.name}
+          />
+        </div>
+      )}
+      {compact && canManageSource && (
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <p className="text-[0.68rem] font-semibold tracking-[0.11em] text-muted-foreground uppercase">
+            Live TV
+          </p>
+          <Button
+            onClick={() => {
+              setShowSourceSetup(true);
+              onSourceManagementChange?.(true);
+            }}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            Manage source
+          </Button>
+        </div>
+      )}
       {!compact && (
         <div className="flex items-end justify-between gap-4">
           <div>
@@ -324,10 +626,28 @@ function ProviderBrowserComponent({
             </p>
             <h2 className="text-2xl font-semibold tracking-tight">Live TV</h2>
           </div>
-          <Badge variant="outline">
-            {provider.counts.channelsNormalized}{" "}
-            {provider.counts.channelsNormalized === 1 ? "channel" : "channels"}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() => {
+                setConfirmingRemoval(false);
+                setRemovalError(null);
+                setShowReplacementForm(false);
+                setShowSourceSetup((visible) => !visible);
+                onSourceManagementChange?.(!showSourceSetup);
+              }}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              Manage source
+            </Button>
+            <Badge variant="outline">
+              {provider.counts.channelsNormalized}{" "}
+              {provider.counts.channelsNormalized === 1
+                ? "channel"
+                : "channels"}
+            </Badge>
+          </div>
         </div>
       )}
 

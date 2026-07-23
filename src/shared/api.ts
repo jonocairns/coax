@@ -3,11 +3,14 @@ import type {
   ChannelPlaybackIntentResult,
   ProviderViewState,
   RapidProviderPlaybackResult,
+  SourceMutationResult,
+  XtreamSourceSetupInput,
 } from "./provider";
 import type { StreamStatsState } from "./stream-stats";
 
 export const IPC_CHANNELS = {
   cycleTestChannel: "coax:cycle-test-channel",
+  configureXtreamSource: "coax:configure-xtream-source",
   getRuntimeVersions: "coax:get-runtime-versions",
   getOverlayState: "coax:get-overlay-state",
   getProviderState: "coax:get-provider-state",
@@ -17,9 +20,11 @@ export const IPC_CHANNELS = {
   playProviderChannel: "coax:play-provider-channel",
   providerStateChanged: "coax:provider-state-changed",
   requestOverlayAction: "coax:request-overlay-action",
+  removeXtreamSource: "coax:remove-xtream-source",
   runRapidPlaylistTest: "coax:run-rapid-playlist-test",
   runRapidProviderTest: "coax:run-rapid-provider-test",
   setOverlayPointerCapture: "coax:set-overlay-pointer-capture",
+  setVideoPreviewVisible: "coax:set-video-preview-visible",
   setVideoViewport: "coax:set-video-viewport",
   setVolume: "coax:set-volume",
   stopPlayback: "coax:stop-playback",
@@ -66,6 +71,9 @@ export interface RapidPlaylistTestResult {
 }
 
 export interface CoaxApi {
+  configureXtreamSource: (
+    input: XtreamSourceSetupInput,
+  ) => Promise<SourceMutationResult>;
   cycleTestChannel: (
     direction: TestChannelDirection,
   ) => Promise<PlaylistIntentResult>;
@@ -84,9 +92,11 @@ export interface CoaxApi {
     channelId: string,
   ) => Promise<ChannelPlaybackIntentResult>;
   requestOverlayAction: (action: OverlayAction) => Promise<OverlayState>;
+  removeXtreamSource: () => Promise<SourceMutationResult>;
   runRapidPlaylistTest: () => Promise<RapidPlaylistTestResult>;
   runRapidProviderTest: () => Promise<RapidProviderPlaybackResult>;
   setOverlayPointerCapture: (capture: boolean) => Promise<void>;
+  setVideoPreviewVisible: (visible: boolean) => Promise<void>;
   setVideoViewport: (viewport: VideoViewport | null) => Promise<void>;
   setVolume: (volume: number) => Promise<OverlayState>;
   stopPlayback: () => Promise<OverlayState>;

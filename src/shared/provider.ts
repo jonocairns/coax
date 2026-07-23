@@ -23,6 +23,38 @@ export interface ProviderRecordCounts {
 export type ProviderFailureKind =
   "authentication" | "configuration" | "provider-data" | "transport";
 
+export type XtreamOutputPreference = "hls" | "ts";
+
+export interface XtreamSourceSetupInput {
+  name: string;
+  outputPreference: XtreamOutputPreference;
+  password: string;
+  serverUrl: string;
+  username: string;
+}
+
+export type SourceMutationFailureKind =
+  | "authentication"
+  | "provider-data"
+  | "replacement"
+  | "storage"
+  | "transport"
+  | "validation";
+
+export type SourceMutationResult =
+  | {
+      ok: true;
+      phase: "not-configured" | "ready";
+    }
+  | {
+      error: {
+        code: string;
+        kind: SourceMutationFailureKind;
+        message: string;
+      };
+      ok: false;
+    };
+
 export type ProviderViewState =
   | { phase: "loading" }
   | { phase: "not-configured" }
@@ -31,6 +63,10 @@ export type ProviderViewState =
       channels: readonly ProviderChannelView[];
       counts: ProviderRecordCounts;
       phase: "ready";
+      source: {
+        name: string;
+        type: "xtream";
+      };
     }
   | {
       error: {

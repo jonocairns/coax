@@ -25,10 +25,13 @@ import {
   type ProviderFailureKind,
   type ProviderViewState,
   type RapidProviderPlaybackResult,
+  type SourceMutationFailureKind,
+  type SourceMutationResult,
 } from "../shared/provider";
 import {
   INITIAL_OVERLAY_STATE,
   reduceOverlayState,
+  shouldRevealPlaybackControlsForPointer,
   type OverlayAction,
   type OverlayState,
   type OverlayStateEvent,
@@ -65,13 +68,17 @@ import { nativeWindowHandleToWid } from "./native-window";
 import { XtreamUtilityClient } from "./provider/client";
 import { XtreamCredentialService } from "./provider/credentials";
 import { XtreamProviderSession } from "./provider/session";
+import {
+  SourceMutationError,
+  XtreamSourceManager,
+} from "./provider/source-manager";
 import { ProviderRequestError } from "./provider/xtream";
 import {
   decideGeometrySynchronization,
   presentationState,
   type GeometryReason,
 } from "./window-lifecycle";
-import { resolveVideoViewportBounds } from "./video-viewport";
+import { resolvePlaybackBounds } from "./video-viewport";
 import {
   createMainWindowOptions,
   createOverlayWindowOptions,
@@ -90,6 +97,7 @@ let playbackLogger: StructuredPlaybackLogger | null = null;
 let mpvController: MpvController | null = null;
 let providerClient: XtreamUtilityClient | null = null;
 let providerSession: XtreamProviderSession | null = null;
+let sourceManager: XtreamSourceManager | null = null;
 let providerState: ProviderViewState = { phase: "loading" };
 let playbackStartup: Promise<void> = Promise.resolve();
 let shutdownStarted = false;
@@ -100,6 +108,7 @@ let overlayAutoHideTimer: ReturnType<typeof setTimeout> | null = null;
 let overlayFadeTimer: ReturnType<typeof setTimeout> | null = null;
 let pointerActivityInterval: ReturnType<typeof setInterval> | null = null;
 let streamStatsVisible = false;
+let videoPreviewVisible = true;
 let videoViewport: VideoViewport | null = null;
 
 const OVERLAY_FADE_DURATION_MS = 220;
@@ -191,17 +200,6 @@ function publishStreamStatsState(): void {
 function setProviderState(state: ProviderViewState): void {
   providerState = state;
   publishProviderState();
-  if (
-    state.phase === "ready" &&
-    process.env.COAX_SLICE3_ACCEPTANCE !== "1" &&
-    process.env.COAX_SLICE4_ACCEPTANCE !== "1" &&
-    process.env.COAX_SLICE5_ACCEPTANCE !== "1" &&
-    process.env.COAX_SLICE6_ACCEPTANCE !== "1" &&
-    process.env.COAX_SLICE7_ACCEPTANCE !== "1" &&
-    process.env.COAX_SLICE8_ACCEPTANCE !== "1"
-  ) {
-    showOverlay(true, "provider-ready", "browse");
-  }
 }
 
 function providerFailure(error: unknown): {
@@ -227,6 +225,28 @@ function providerFailure(error: unknown): {
     configuration: "Provider configuration is unavailable.",
     "provider-data": "Provider returned an invalid channel response.",
     transport: "Provider could not be reached.",
+  }[kind];
+  return { code, kind, message };
+}
+
+function sourceMutationFailure(error: unknown): {
+  code: string;
+  kind: SourceMutationFailureKind;
+  message: string;
+} {
+  const kind =
+    error instanceof SourceMutationError ? error.kind : "replacement";
+  const code =
+    error instanceof SourceMutationError && /^[a-z0-9-]{1,64}$/.test(error.code)
+      ? error.code
+      : "source-operation-failed";
+  const message = {
+    authentication: "The provider rejected those account details.",
+    "provider-data": "The provider returned an invalid channel response.",
+    replacement: "The working source could not be replaced.",
+    storage: "The source could not be stored securely.",
+    transport: "The provider could not be reached.",
+    validation: "Check the server address and required account fields.",
   }[kind];
   return { code, kind, message };
 }
@@ -379,9 +399,9 @@ function startPointerActivityMonitoring(): void {
     ) {
       return;
     }
-    if (overlayState.visible && overlayState.view === "browse") return;
+    if (overlayState.view === "browse") return;
 
-    if (!overlayState.visible || overlayState.fading) {
+    if (shouldRevealPlaybackControlsForPointer(overlayState)) {
       showOverlay(false, "pointer-activity", "controls");
     }
     scheduleFeedbackAutoHide(OVERLAY_POINTER_IDLE_MS, "pointer-inactivity");
@@ -397,7 +417,7 @@ function applyOverlayAction(action: OverlayAction): OverlayState {
   const window = currentWindow();
   if (action === "browse") {
     if (window.isFullScreen()) setMainWindowFullscreen(false);
-    showOverlay(true, "renderer-browse", "browse");
+    hideOverlay("renderer-browse", true, "browse");
   } else if (action === "watch" || action === "fullscreen") {
     videoViewport = null;
     // Expand the existing native player while the browser still covers it so
@@ -408,14 +428,14 @@ function applyOverlayAction(action: OverlayAction): OverlayState {
       setMainWindowFullscreen(true);
     }
   } else if (action === "hide") {
-    if (overlayState.view === "browse") videoViewport = null;
     hideOverlay("renderer-back", true, "controls");
   } else if (action === "show") {
-    showOverlay(true, "renderer-show", "controls");
+    if (overlayState.view === "controls") {
+      showOverlay(true, "renderer-show", "controls");
+    }
   } else if (overlayState.visible) {
-    if (overlayState.view === "browse") videoViewport = null;
     hideOverlay("renderer-toggle", true, "controls");
-  } else {
+  } else if (overlayState.view === "controls") {
     showOverlay(true, "renderer-toggle", "controls");
   }
   alignNativeLayers(window);
@@ -509,8 +529,10 @@ function providerZapFeedback(channelId: string, generation: number): void {
     generation,
     type: "channel-zap",
   });
-  showOverlay(false, "provider-channel-feedback");
-  scheduleFeedbackAutoHide();
+  if (overlayState.view === "controls") {
+    showOverlay(false, "provider-channel-feedback");
+    scheduleFeedbackAutoHide();
+  }
   playbackLogger?.write("provider-channel-requested", generation, {
     channelId,
     transport:
@@ -522,6 +544,44 @@ function providerZapFeedback(channelId: string, generation: number): void {
 }
 
 function registerIpcHandlers(): void {
+  ipcMain.handle(
+    IPC_CHANNELS.configureXtreamSource,
+    async (event, input: unknown): Promise<SourceMutationResult> => {
+      if (event.sender.id !== mainWindow?.webContents.id) {
+        throw new Error("untrusted-renderer");
+      }
+      const manager = sourceManager;
+      if (!manager) {
+        return {
+          error: {
+            code: "source-service-unavailable",
+            kind: "replacement",
+            message: "Source setup is not ready yet.",
+          },
+          ok: false,
+        };
+      }
+      try {
+        const state = await manager.configure(input);
+        setProviderState(state);
+        if (state.phase !== "ready") {
+          throw new Error("source-ready-state-missing");
+        }
+        playbackLogger?.write("provider-source-replaced", 0, {
+          ...state.counts,
+          status: "ready",
+        });
+        return { ok: true, phase: "ready" };
+      } catch (error) {
+        const failure = sourceMutationFailure(error);
+        playbackLogger?.write("provider-source-replacement-failed", 0, {
+          failureKind: failure.kind,
+          reason: failure.code,
+        });
+        return { error: failure, ok: false };
+      }
+    },
+  );
   ipcMain.handle(IPC_CHANNELS.getRuntimeVersions, (event): RuntimeVersions => {
     if (!isKnownRenderer(event.sender.id))
       throw new Error("untrusted-renderer");
@@ -648,6 +708,53 @@ function registerIpcHandlers(): void {
     },
   );
   ipcMain.handle(
+    IPC_CHANNELS.removeXtreamSource,
+    async (event): Promise<SourceMutationResult> => {
+      if (event.sender.id !== mainWindow?.webContents.id) {
+        throw new Error("untrusted-renderer");
+      }
+      const manager = sourceManager;
+      if (!manager) {
+        return {
+          error: {
+            code: "source-service-unavailable",
+            kind: "replacement",
+            message: "Source removal is not ready yet.",
+          },
+          ok: false,
+        };
+      }
+      try {
+        await manager.remove();
+        setProviderState({ phase: "not-configured" });
+        try {
+          if (mpvController) {
+            const generation = mpvController.stopPlayback();
+            videoPlaybackReady = false;
+            videoViewport = null;
+            videoWindow?.hide();
+            transitionOverlayState({ generation, type: "stopped" });
+          }
+        } catch {
+          playbackLogger?.write("provider-source-playback-cleanup-failed", 0, {
+            reason: "playback-cleanup-failed",
+          });
+        }
+        playbackLogger?.write("provider-source-removed", 0, {
+          status: "not-configured",
+        });
+        return { ok: true, phase: "not-configured" };
+      } catch (error) {
+        const failure = sourceMutationFailure(error);
+        playbackLogger?.write("provider-source-removal-failed", 0, {
+          failureKind: failure.kind,
+          reason: failure.code,
+        });
+        return { error: failure, ok: false };
+      }
+    },
+  );
+  ipcMain.handle(
     IPC_CHANNELS.setOverlayPointerCapture,
     (event, capture: unknown): void => {
       if (event.sender.id !== overlayWindow?.webContents.id) {
@@ -660,10 +767,23 @@ function registerIpcHandlers(): void {
     },
   );
   ipcMain.handle(
+    IPC_CHANNELS.setVideoPreviewVisible,
+    (event, visible: unknown): void => {
+      if (event.sender.id !== mainWindow?.webContents.id) {
+        throw new Error("untrusted-renderer");
+      }
+      if (typeof visible !== "boolean") {
+        throw new Error("invalid-video-preview-visibility");
+      }
+      videoPreviewVisible = visible;
+      alignNativeLayers(currentWindow());
+    },
+  );
+  ipcMain.handle(
     IPC_CHANNELS.setVideoViewport,
     (event, viewport: unknown): void => {
-      if (event.sender.id !== overlayWindow?.webContents.id) {
-        throw new Error("untrusted-overlay-renderer");
+      if (event.sender.id !== mainWindow?.webContents.id) {
+        throw new Error("untrusted-renderer");
       }
       if (
         viewport !== null &&
@@ -697,7 +817,7 @@ function registerIpcHandlers(): void {
     videoViewport = null;
     videoWindow?.hide();
     transitionOverlayState({ generation, type: "stopped" });
-    showOverlay(true, "playback-stopped", "browse");
+    applyOverlayAction("browse");
     return overlayState;
   });
   ipcMain.handle(IPC_CHANNELS.toggleMute, (event): OverlayState => {
@@ -854,7 +974,11 @@ function recordSettledGeometry(
   const bounds = window.getContentBounds();
   const layerBounds = resolveContentLayerBounds(bounds, flags.fullscreen);
   alignNativeLayers(window, bounds);
-  const playbackBounds = resolveVideoViewportBounds(layerBounds, videoViewport);
+  const playbackBounds = resolvePlaybackBounds(
+    bounds,
+    layerBounds,
+    videoViewport,
+  );
   const display = screen.getDisplayMatching(playbackBounds);
   mpvController?.recordWindowGeometry({
     displayId: display.id,
@@ -889,12 +1013,19 @@ function alignNativeLayers(
   const layerBounds = resolveContentLayerBounds(bounds, window.isFullScreen());
   const host = videoWindow;
   if (!window.isVisible() || window.isMinimized()) return;
-  if (host && !host.isDestroyed() && videoPlaybackReady) {
+  if (
+    host &&
+    !host.isDestroyed() &&
+    videoPlaybackReady &&
+    videoPreviewVisible
+  ) {
     host.setBounds(
-      resolveVideoViewportBounds(layerBounds, videoViewport),
+      resolvePlaybackBounds(bounds, layerBounds, videoViewport),
       false,
     );
     if (!host.isVisible()) host.showInactive();
+  } else if (host && !host.isDestroyed() && host.isVisible()) {
+    host.hide();
   }
   const overlay = overlayWindow;
   if (overlay && !overlay.isDestroyed()) {
@@ -983,6 +1114,7 @@ function attachWindowLifecycle(window: BrowserWindow): void {
       input.key === "Escape" &&
       !input.isAutoRepeat &&
       !overlayState.visible &&
+      overlayState.view === "controls" &&
       videoPlaybackReady
     ) {
       event.preventDefault();
@@ -998,7 +1130,12 @@ function attachWindowLifecycle(window: BrowserWindow): void {
       toggleMainWindowFullscreen();
       return;
     }
-    if (input.type === "keyDown" && input.key === "F8" && !input.isAutoRepeat) {
+    if (
+      input.type === "keyDown" &&
+      input.key === "F8" &&
+      !input.isAutoRepeat &&
+      overlayState.view === "controls"
+    ) {
       event.preventDefault();
       applyOverlayAction("toggle");
       return;
@@ -1007,7 +1144,8 @@ function attachWindowLifecycle(window: BrowserWindow): void {
       input.type === "keyDown" &&
       input.key === "Enter" &&
       !input.isAutoRepeat &&
-      !overlayState.visible
+      !overlayState.visible &&
+      overlayState.view === "controls"
     ) {
       event.preventDefault();
       showOverlay(true, "keyboard-enter");
@@ -1132,6 +1270,7 @@ function configureControlledAcceptance(window: BrowserWindow): void {
   const slice7 = process.env.COAX_SLICE7_ACCEPTANCE === "1";
   const slice8 = process.env.COAX_SLICE8_ACCEPTANCE === "1";
   if (!slice6 && !slice7 && !slice8) return;
+  transitionOverlayState({ type: "hide", view: "controls" });
   if (
     process.env.COAX_SLICE6_FULLSCREEN === "1" ||
     process.env.COAX_SLICE7_FULLSCREEN === "1" ||
@@ -1219,7 +1358,9 @@ function handleMpvPlaybackStatus(event: MpvPlaybackStatusEvent): void {
     generation: event.generation,
     type: "recovering",
   });
-  showOverlay(false, `recovery-${event.reason}`);
+  if (overlayState.view === "controls") {
+    showOverlay(false, `recovery-${event.reason}`);
+  }
 }
 
 function restoreOverlayAfterMpvStacking(): void {
@@ -1341,9 +1482,6 @@ async function startM0Playback(
         reason: "local-input-not-configured",
       });
     }
-    if (providerState.phase !== "error") {
-      setProviderState({ phase: "not-configured" });
-    }
   }
   try {
     window.show();
@@ -1432,7 +1570,7 @@ async function startM0Playback(
     await mpvController.start(input ?? undefined);
     videoPlaybackReady = input !== null;
     if (videoPlaybackReady) scheduleGeometrySynchronization(window, "ready");
-    if (!controlledAcceptance && credentialStatus === "available") {
+    if (!controlledAcceptance) {
       providerClient = new XtreamUtilityClient(
         join(__dirname, "provider-worker.js"),
       );
@@ -1441,26 +1579,36 @@ async function startM0Playback(
         providerClient,
         mpvController,
       );
-      try {
-        setProviderState(await providerSession.refresh());
-        if (providerState.phase === "ready") {
-          playbackLogger.write("provider-catalog-loaded", 0, {
-            ...providerState.counts,
-            hlsVariants: providerState.channels.filter(
-              (channel) => channel.transport === "hls",
-            ).length,
-            mpegTsVariants: providerState.channels.filter(
-              (channel) => channel.transport === "mpeg-ts",
-            ).length,
+      sourceManager = new XtreamSourceManager(
+        credentials,
+        providerClient,
+        providerSession,
+      );
+      if (credentialStatus === "available") {
+        try {
+          providerSession.setSourceName(await credentials.loadName());
+          setProviderState(await providerSession.refresh());
+          if (providerState.phase === "ready") {
+            playbackLogger.write("provider-catalog-loaded", 0, {
+              ...providerState.counts,
+              hlsVariants: providerState.channels.filter(
+                (channel) => channel.transport === "hls",
+              ).length,
+              mpegTsVariants: providerState.channels.filter(
+                (channel) => channel.transport === "mpeg-ts",
+              ).length,
+            });
+          }
+        } catch (error) {
+          const failure = providerFailure(error);
+          setProviderState({ error: failure, phase: "error" });
+          playbackLogger.write("provider-catalog-failed", 0, {
+            failureKind: failure.kind,
+            reason: failure.code,
           });
         }
-      } catch (error) {
-        const failure = providerFailure(error);
-        setProviderState({ error: failure, phase: "error" });
-        playbackLogger.write("provider-catalog-failed", 0, {
-          failureKind: failure.kind,
-          reason: failure.code,
-        });
+      } else if (providerState.phase !== "error") {
+        setProviderState({ phase: "not-configured" });
       }
     }
   } catch {
@@ -1478,6 +1626,7 @@ async function shutdownOwnedProcesses(): Promise<void> {
     await playbackStartup;
     providerClient?.close();
     providerClient = null;
+    sourceManager = null;
     await mpvController?.shutdown();
     await playbackLogger?.close();
   } finally {

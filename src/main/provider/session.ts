@@ -31,6 +31,7 @@ export interface GenerationPlaybackTarget {
 export class XtreamProviderSession {
   private catalog: TrustedProviderCatalog | null = null;
   private activeCredentials: XtreamCredentials | null = null;
+  private sourceName = "Xtream source";
 
   constructor(
     private readonly credentials: CredentialReader,
@@ -45,6 +46,26 @@ export class XtreamProviderSession {
     return this.viewState();
   }
 
+  replace(
+    credentials: XtreamCredentials,
+    catalog: TrustedProviderCatalog,
+    sourceName = "Xtream source",
+  ): ProviderViewState {
+    this.activeCredentials = credentials;
+    this.catalog = catalog;
+    this.sourceName = sourceName;
+    return this.viewState();
+  }
+
+  setSourceName(sourceName: string): void {
+    this.sourceName = sourceName;
+  }
+
+  clear(): void {
+    this.activeCredentials = null;
+    this.catalog = null;
+  }
+
   viewState(): ProviderViewState {
     if (!this.catalog) return { phase: "loading" };
     return {
@@ -52,6 +73,7 @@ export class XtreamProviderSession {
       channels: this.catalog.viewChannels,
       counts: this.catalog.counts,
       phase: "ready",
+      source: { name: this.sourceName, type: "xtream" },
     };
   }
 

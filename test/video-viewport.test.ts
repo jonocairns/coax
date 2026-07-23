@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveVideoViewportBounds } from "../src/main/video-viewport";
+import {
+  resolvePlaybackBounds,
+  resolveVideoViewportBounds,
+} from "../src/main/video-viewport";
 
 describe("native video viewport", () => {
   const windowBounds = { height: 540, width: 960, x: 120, y: 80 };
@@ -30,5 +33,28 @@ describe("native video viewport", () => {
         y: 500,
       }),
     ).toEqual({ height: 90, width: 160, x: 920, y: 530 });
+  });
+
+  it("does not add the custom title-bar offset twice for a preview", () => {
+    const contentBounds = { height: 540, width: 960, x: 120, y: 80 };
+    const videoLayerBounds = { height: 496, width: 960, x: 120, y: 124 };
+
+    expect(
+      resolvePlaybackBounds(contentBounds, videoLayerBounds, {
+        height: 221,
+        width: 394,
+        x: 566,
+        y: 44,
+      }),
+    ).toEqual({ height: 221, width: 394, x: 686, y: 124 });
+  });
+
+  it("keeps the full player below the custom title bar", () => {
+    const contentBounds = { height: 540, width: 960, x: 120, y: 80 };
+    const videoLayerBounds = { height: 496, width: 960, x: 120, y: 124 };
+
+    expect(
+      resolvePlaybackBounds(contentBounds, videoLayerBounds, null),
+    ).toEqual(videoLayerBounds);
   });
 });
