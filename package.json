@@ -6,7 +6,7 @@
   "description": "A native-quality IPTV player for Windows",
   "main": "./out/main/index.js",
   "scripts": {
-    "postinstall": "electron --version",
+    "postinstall": "electron --no-sandbox --version",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
