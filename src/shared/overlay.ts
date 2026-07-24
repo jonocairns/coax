@@ -68,6 +68,16 @@ export function shouldRevealPlaybackControlsForPointer(
   return state.view === "controls" && (!state.visible || state.fading);
 }
 
+// Controller input has exactly one owner in every state: the playback-controls
+// overlay while it is visible, otherwise the main shell window. Both windows
+// poll the same gamepad, so gating each window's controller handler on this
+// shared predicate keeps a single physical press from being processed twice.
+export function playbackControlsOwnController(
+  state: Pick<OverlayState, "view" | "visible">,
+): boolean {
+  return state.view === "controls" && state.visible;
+}
+
 export function reduceOverlayState(
   state: Readonly<OverlayState>,
   event: OverlayStateEvent,

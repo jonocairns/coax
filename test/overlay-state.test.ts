@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   INITIAL_OVERLAY_STATE,
+  playbackControlsOwnController,
   reduceOverlayState,
   shouldRevealPlaybackControlsForPointer,
 } from "../src/shared/overlay";
@@ -173,5 +174,32 @@ describe("playback overlay state", () => {
       now: "Choose a channel",
       phase: "ready",
     });
+  });
+});
+
+describe("controller ownership", () => {
+  // The overlay owns controller input only while its controls are visible;
+  // the main shell window owns every other state. The two are exact
+  // complements, so exactly one window handles each physical press.
+  it("gives ownership to the overlay while playback controls are visible", () => {
+    expect(
+      playbackControlsOwnController({ view: "controls", visible: true }),
+    ).toBe(true);
+  });
+
+  it("leaves ownership with the shell while watching with controls hidden", () => {
+    expect(
+      playbackControlsOwnController({ view: "controls", visible: false }),
+    ).toBe(false);
+  });
+
+  it("leaves ownership with the shell in the browse view", () => {
+    expect(
+      playbackControlsOwnController({ view: "browse", visible: false }),
+    ).toBe(false);
+    // A visible browse overlay still is not the controls surface.
+    expect(
+      playbackControlsOwnController({ view: "browse", visible: true }),
+    ).toBe(false);
   });
 });

@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Play, Square, Tv } from "lucide-react";
-import type { OverlayState } from "../../shared/overlay";
+import {
+  type OverlayState,
+  playbackControlsOwnController,
+} from "../../shared/overlay";
 import { StatusIndicator } from "./components/StatusIndicator";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
@@ -75,6 +78,7 @@ export function BrowseScreen({
         <ProviderBrowser
           activeChannelId={state.channelId}
           compact
+          controllerActive={!playbackControlsOwnController(state)}
           onInitialized={onInitialized}
           onSourceManagementChange={setManagingSource}
           playbackFeedback={state.feedback}

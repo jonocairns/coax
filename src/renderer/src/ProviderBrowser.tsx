@@ -37,6 +37,10 @@ import { useControllerNavigation } from "./use-controller-navigation";
 interface ProviderBrowserProps {
   activeChannelId?: string | null;
   compact?: boolean;
+  // Whether the main shell window currently owns controller input. False while
+  // the playback-controls overlay is visible, so a single Back press is never
+  // handled by both windows. See playbackControlsOwnController.
+  controllerActive?: boolean;
   onInitialized?: () => void;
   onSourceManagementChange?: (open: boolean) => void;
   playbackFeedback?: string;
@@ -257,6 +261,7 @@ const ChannelButton = memo(function ChannelButton({
 function ProviderBrowserComponent({
   activeChannelId: controlledActiveChannelId,
   compact = false,
+  controllerActive = true,
   onInitialized,
   onSourceManagementChange,
   playbackFeedback,
@@ -490,7 +495,7 @@ function ProviderBrowserComponent({
     if (nextId !== null) targets[Number(nextId)]?.focus();
   }
 
-  useControllerNavigation(handleControllerAction);
+  useControllerNavigation(handleControllerAction, controllerActive);
 
   const play = useCallback(async (channelId: string, name: string) => {
     const request = ++playbackRequest.current;
