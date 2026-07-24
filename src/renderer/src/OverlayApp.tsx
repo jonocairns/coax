@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2, Square } from "lucide-react";
 import type { ControllerNavigationAction } from "../../shared/controller-navigation";
-import { INITIAL_OVERLAY_STATE, type OverlayState } from "../../shared/overlay";
+import {
+  INITIAL_OVERLAY_STATE,
+  type OverlayState,
+  playbackControlsOwnController,
+} from "../../shared/overlay";
 import {
   INITIAL_STREAM_STATS_SNAPSHOT,
   type StreamStatsState,
@@ -23,7 +27,7 @@ export function OverlayApp(): React.JSX.Element {
   });
   const [fullscreen, setFullscreen] = useState(false);
   const controls = useRef<Array<HTMLButtonElement | null>>([]);
-  const showingControls = state.visible && state.view === "controls";
+  const showingControls = playbackControlsOwnController(state);
 
   useEffect(() => {
     void window.coax.getOverlayState().then(setState);
@@ -75,10 +79,11 @@ export function OverlayApp(): React.JSX.Element {
     controls.current.find((control) => control !== null)?.focus();
   }
 
+  // The overlay only owns controller input while its controls are visible; the
+  // hook is gated on `showingControls`, so this runs solely in that state.
   function handleControllerAction(action: ControllerNavigationAction): void {
-    if (!showingControls) return;
     if (action === "back") {
-      void window.coax.requestOverlayAction("hide");
+      void window.coax.requestOverlayAction("back");
     } else if (action === "accept") {
       if (document.activeElement instanceof HTMLButtonElement) {
         document.activeElement.click();
@@ -90,7 +95,7 @@ export function OverlayApp(): React.JSX.Element {
     }
   }
 
-  useControllerNavigation(handleControllerAction);
+  useControllerNavigation(handleControllerAction, showingControls);
 
   return (
     <main
