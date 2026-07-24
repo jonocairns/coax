@@ -93,6 +93,7 @@ let mainWindow: BrowserWindow | null = null;
 let videoWindow: BaseWindow | null = null;
 let overlayWindow: BrowserWindow | null = null;
 let videoPlaybackReady = false;
+let lastBackAppliedAt = 0;
 let playbackLogger: StructuredPlaybackLogger | null = null;
 let mpvController: MpvController | null = null;
 let providerClient: XtreamUtilityClient | null = null;
@@ -415,10 +416,24 @@ function stopPointerActivityMonitoring(): void {
 
 // "back" is the one place Escape (both windows) and controller Back resolve
 // fullscreen/controls/browse, instead of three divergent implementations.
+//
+// Controller ownership already routes each press to a single window, but the
+// two windows learn of an ownership change from separate overlay-state
+// broadcasts, leaving a sub-frame skew where both could dispatch one press.
+// This coalescing window is the belt-and-suspenders guard for that transient:
+// wide enough to absorb the two near-simultaneous back dispatches, far below
+// the cadence of an intentional double-press so it never drops a real one.
+const BACK_COALESCE_WINDOW_MS = 60;
+
 function applyOverlayAction(action: OverlayAction): OverlayState {
   const window = currentWindow();
   let revealsVideo = false;
   if (action === "back") {
+    const now = Date.now();
+    if (now - lastBackAppliedAt < BACK_COALESCE_WINDOW_MS) {
+      return overlayState;
+    }
+    lastBackAppliedAt = now;
     if (window.isFullScreen()) {
       setMainWindowFullscreen(false);
     } else if (overlayState.view === "controls" && overlayState.visible) {
