@@ -1,5 +1,5 @@
 export type OverlayAction =
-  "browse" | "fullscreen" | "hide" | "show" | "toggle" | "watch";
+  "back" | "browse" | "fullscreen" | "hide" | "show" | "toggle" | "watch";
 
 export type OverlayView = "browse" | "controls";
 

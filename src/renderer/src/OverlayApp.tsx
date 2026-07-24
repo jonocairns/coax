@@ -76,10 +76,12 @@ export function OverlayApp(): React.JSX.Element {
   }
 
   function handleControllerAction(action: ControllerNavigationAction): void {
-    if (!showingControls) return;
     if (action === "back") {
-      void window.coax.requestOverlayAction("hide");
-    } else if (action === "accept") {
+      void window.coax.requestOverlayAction("back");
+      return;
+    }
+    if (!showingControls) return;
+    if (action === "accept") {
       if (document.activeElement instanceof HTMLButtonElement) {
         document.activeElement.click();
       } else {

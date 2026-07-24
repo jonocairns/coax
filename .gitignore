@@ -39,6 +39,9 @@ runtime/mpv/**/*.zip
 # Unsanitized M0 evidence
 artifacts/m0/
 
+# Local tooling indexes
+.repoql/
+
 # Editor and operating-system noise
 .direnv/
 .vscode/

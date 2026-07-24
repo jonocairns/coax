@@ -9,11 +9,16 @@ import {
 } from "react";
 import { ArrowLeft, Play, Search, Trash2 } from "lucide-react";
 import { filterChannels } from "../../shared/channel-filter";
+import type { ControllerNavigationAction } from "../../shared/controller-navigation";
 import type { OverlayFeedbackPhase } from "../../shared/overlay";
 import type {
   ProviderChannelView,
   ProviderViewState,
 } from "../../shared/provider";
+import {
+  nextSpatialFocusId,
+  type SpatialFocusRect,
+} from "../../shared/spatial-focus";
 import { StatusIndicator } from "./components/StatusIndicator";
 import { SourceSetupForm } from "./SourceSetupForm";
 import { Badge } from "./components/ui/badge";
@@ -27,6 +32,7 @@ import {
   SelectValue,
 } from "./components/ui/select";
 import { cn } from "./lib/utils";
+import { useControllerNavigation } from "./use-controller-navigation";
 
 interface ProviderBrowserProps {
   activeChannelId?: string | null;
@@ -203,6 +209,7 @@ const ChannelButton = memo(function ChannelButton({
           "min-h-12 grid-cols-[auto_minmax(0,1fr)_auto] rounded-md px-2.5 py-2 max-[720px]:grid-cols-[auto_minmax(0,1fr)]",
         pending && "text-foreground/90",
       )}
+      data-spatial-focus="true"
       onClick={() => onPlay(channel.id, channel.name)}
       type="button"
       variant="ghost"
@@ -284,6 +291,7 @@ function ProviderBrowserComponent({
   const [removingSource, setRemovingSource] = useState(false);
   const [removalError, setRemovalError] = useState<string | null>(null);
   const playbackRequest = useRef(0);
+  const browserRoot = useRef<HTMLElement | null>(null);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const activeChannelId =
     controlledActiveChannelId === undefined
@@ -402,6 +410,87 @@ function ProviderBrowserComponent({
         : [],
     [normalizedSearchQuery, provider, selectedCategory],
   );
+
+  function closeSourceManagement(): void {
+    setShowSourceSetup(false);
+    setShowReplacementForm(false);
+    setConfirmingRemoval(false);
+    setRemovalError(null);
+    onSourceManagementChange?.(false);
+  }
+
+  function handleControllerAction(action: ControllerNavigationAction): void {
+    if (action === "back") {
+      if (showSourceSetup && provider.phase === "ready") {
+        closeSourceManagement();
+      } else {
+        void window.coax.requestOverlayAction("back");
+      }
+      return;
+    }
+
+    const targets = browserRoot.current
+      ? Array.from(
+          browserRoot.current.querySelectorAll<HTMLElement>(
+            '[data-spatial-focus="true"]',
+          ),
+        )
+      : [];
+    if (targets.length === 0) return;
+    const active = document.activeElement;
+
+    if (action === "accept") {
+      if (active instanceof HTMLButtonElement && targets.includes(active)) {
+        active.click();
+      } else {
+        targets[0]?.focus();
+      }
+      return;
+    }
+
+    // The compact category picker is one dropdown, not a button list, so
+    // cycle its value directly instead of geometric hopping.
+    if (
+      (action === "up" || action === "down") &&
+      active instanceof HTMLElement &&
+      active.dataset.slot === "select-trigger"
+    ) {
+      const categoryIds = categoryDetails.map((category) => category.id);
+      const index = categoryIds.indexOf(selectedCategory ?? "");
+      const nextIndex = Math.min(
+        Math.max(index + (action === "down" ? 1 : -1), 0),
+        categoryIds.length - 1,
+      );
+      const nextCategoryId = categoryIds[nextIndex];
+      if (nextCategoryId && nextCategoryId !== selectedCategory) {
+        setSelectedCategory(nextCategoryId);
+        setSearchQuery("");
+      }
+      return;
+    }
+
+    if (!(active instanceof HTMLElement) || !targets.includes(active)) {
+      targets[0]?.focus();
+      return;
+    }
+
+    const rects: SpatialFocusRect[] = targets.map((element, index) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        bottom: bounds.bottom,
+        id: String(index),
+        left: bounds.left,
+        right: bounds.right,
+        top: bounds.top,
+      };
+    });
+    const currentRect = rects[targets.indexOf(active)];
+    if (!currentRect) return;
+    const nextId = nextSpatialFocusId(currentRect, rects, action);
+    if (nextId !== null) targets[Number(nextId)]?.focus();
+  }
+
+  useControllerNavigation(handleControllerAction);
 
   const play = useCallback(async (channelId: string, name: string) => {
     const request = ++playbackRequest.current;
@@ -541,13 +630,6 @@ function ProviderBrowserComponent({
     );
   }
 
-  const closeSourceManagement = (): void => {
-    setShowSourceSetup(false);
-    setShowReplacementForm(false);
-    setConfirmingRemoval(false);
-    setRemovalError(null);
-    onSourceManagementChange?.(false);
-  };
   const setRemovalConfirmation = (confirming: boolean): void => {
     setConfirmingRemoval(confirming);
     if (!confirming) setRemovalError(null);
@@ -582,7 +664,7 @@ function ProviderBrowserComponent({
   }
 
   return (
-    <section className={browserClassName}>
+    <section className={browserClassName} ref={browserRoot}>
       {!compact && canManageSource && showSourceSetup && (
         <div className="mb-6">
           <SourceManagementPanel
@@ -664,6 +746,7 @@ function ProviderBrowserComponent({
             compact && "border-transparent bg-secondary/55",
             isSearching ? "pr-24" : "pr-3",
           )}
+          data-spatial-focus="true"
           onChange={(event) => setSearchQuery(event.target.value)}
           placeholder={`Search ${provider.counts.channelsNormalized} channels`}
           spellCheck={false}
@@ -700,6 +783,7 @@ function ProviderBrowserComponent({
                 }
                 key={category.id}
                 className="h-auto min-h-10 w-full justify-between gap-3 px-3 text-left text-muted-foreground aria-[current=page]:bg-accent aria-[current=page]:font-semibold aria-[current=page]:text-accent-foreground"
+                data-spatial-focus="true"
                 onClick={() => {
                   setSelectedCategory(category.id);
                   setSearchQuery("");
@@ -732,6 +816,7 @@ function ProviderBrowserComponent({
                 <SelectTrigger
                   aria-labelledby="category-select-label"
                   className="w-full border-transparent bg-secondary/70 tracking-normal text-secondary-foreground normal-case shadow-none"
+                  data-spatial-focus="true"
                 >
                   <SelectValue placeholder="Choose a category" />
                 </SelectTrigger>
